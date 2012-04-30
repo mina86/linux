@@ -583,11 +583,115 @@ static int dwc3_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int dwc3_prepare(struct device *dev)
+{
+	struct dwc3	*dwc = dev_get_drvdata(dev);
+	unsigned long	flags;
+
+	spin_lock_irqsave(&dwc->lock, flags);
+
+	switch (dwc->mode) {
+	case DWC3_MODE_DEVICE:
+	case DWC3_MODE_DRD:
+		dwc3_gadget_prepare(dwc);
+		/* FALLTHROUGH */
+	case DWC3_MODE_HOST:
+	default:
+		dwc3_event_buffers_cleanup(dwc);
+		break;
+	}
+
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	return 0;
+}
+
+static void dwc3_complete(struct device *dev)
+{
+	struct dwc3	*dwc = dev_get_drvdata(dev);
+	unsigned long	flags;
+
+	spin_lock_irqsave(&dwc->lock, flags);
+
+	switch (dwc->mode) {
+	case DWC3_MODE_DEVICE:
+	case DWC3_MODE_DRD:
+		dwc3_gadget_complete(dwc);
+		/* FALLTHROUGH */
+	case DWC3_MODE_HOST:
+	default:
+		dwc3_event_buffers_setup(dwc);
+		break;
+	}
+
+	spin_unlock_irqrestore(&dwc->lock, flags);
+}
+
+static int dwc3_suspend(struct device *dev)
+{
+	struct dwc3	*dwc = dev_get_drvdata(dev);
+	unsigned long	flags;
+
+	spin_lock_irqsave(&dwc->lock, flags);
+
+	switch (dwc->mode) {
+	case DWC3_MODE_DEVICE:
+	case DWC3_MODE_DRD:
+		dwc3_gadget_suspend(dwc);
+		/* FALLTHROUGH */
+	case DWC3_MODE_HOST:
+	default:
+		/* do nothing */
+		break;
+	}
+
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	return 0;
+}
+
+static int dwc3_resume(struct device *dev)
+{
+	struct dwc3	*dwc = dev_get_drvdata(dev);
+	unsigned long	flags;
+
+	spin_lock_irqsave(&dwc->lock, flags);
+
+	switch (dwc->mode) {
+	case DWC3_MODE_DEVICE:
+	case DWC3_MODE_DRD:
+		dwc3_gadget_resume(dwc);
+		/* FALLTHROUGH */
+	case DWC3_MODE_HOST:
+	default:
+		/* do nothing */
+		break;
+	}
+
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	return 0;
+}
+
+static const struct dev_pm_ops dwc3_dev_pm_ops = {
+	.prepare	= dwc3_prepare,
+	.complete	= dwc3_complete,
+
+	SET_SYSTEM_SLEEP_PM_OPS(dwc3_suspend, dwc3_resume)
+};
+
+#define DWC3_PM_OPS	&(dwc3_dev_pm_ops)
+#else
+#define DWC3_PM_OPS	NULL
+#endif
+
 static struct platform_driver dwc3_driver = {
 	.probe		= dwc3_probe,
 	.remove		= dwc3_remove,
 	.driver		= {
 		.name	= "dwc3",
+		.pm	= DWC3_PM_OPS,
 	},
 };
 

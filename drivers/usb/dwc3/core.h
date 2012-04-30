@@ -862,4 +862,10 @@ void dwc3_host_exit(struct dwc3 *dwc);
 int dwc3_gadget_init(struct dwc3 *dwc);
 void dwc3_gadget_exit(struct dwc3 *dwc);
 
+/* power management interface */
+int dwc3_gadget_prepare(struct dwc3 *dwc);
+void dwc3_gadget_complete(struct dwc3 *dwc);
+int dwc3_gadget_suspend(struct dwc3 *dwc);
+int dwc3_gadget_resume(struct dwc3 *dwc);
+
 #endif /* __DRIVERS_USB_DWC3_CORE_H */
