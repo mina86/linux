@@ -698,6 +698,7 @@ struct dwc3 {
 	unsigned		delayed_status:1;
 	unsigned		needs_fifo_resize:1;
 	unsigned		resize_fifos:1;
+	unsigned		pullups_connected:1;
 
 	enum dwc3_ep0_next	ep0_next_event;
 	enum dwc3_ep0_state	ep0state;
@@ -876,5 +877,11 @@ static inline int dwc3_gadget_init(struct dwc3 *dwc)
 static inline void dwc3_gadget_exit(struct dwc3 *dwc)
 { }
 #endif
+
+/* power management interface */
+int dwc3_gadget_prepare(struct dwc3 *dwc);
+void dwc3_gadget_complete(struct dwc3 *dwc);
+int dwc3_gadget_suspend(struct dwc3 *dwc);
+int dwc3_gadget_resume(struct dwc3 *dwc);
 
 #endif /* __DRIVERS_USB_DWC3_CORE_H */
