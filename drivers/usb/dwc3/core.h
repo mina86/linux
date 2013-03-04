@@ -487,6 +487,12 @@ enum dwc3_link_state {
 	DWC3_LINK_STATE_MASK		= 0x0f,
 };
 
+enum dwc3_device_state {
+	DWC3_DEFAULT_STATE,
+	DWC3_ADDRESS_STATE,
+	DWC3_CONFIGURED_STATE,
+};
+
 /* TRB Length, PCM and Status */
 #define DWC3_TRB_SIZE_MASK	(0x00ffffff)
 #define DWC3_TRB_SIZE_LENGTH(n)	((n) & DWC3_TRB_SIZE_MASK)
@@ -698,11 +704,11 @@ struct dwc3 {
 	unsigned		delayed_status:1;
 	unsigned		needs_fifo_resize:1;
 	unsigned		resize_fifos:1;
-	unsigned		pullups_connected:1;
 
 	enum dwc3_ep0_next	ep0_next_event;
 	enum dwc3_ep0_state	ep0state;
 	enum dwc3_link_state	link_state;
+	enum dwc3_device_state	dev_state;
 
 	u16			isoch_delay;
 	u16			u2sel;
@@ -877,11 +883,5 @@ static inline int dwc3_gadget_init(struct dwc3 *dwc)
 static inline void dwc3_gadget_exit(struct dwc3 *dwc)
 { }
 #endif
-
-/* power management interface */
-int dwc3_gadget_prepare(struct dwc3 *dwc);
-void dwc3_gadget_complete(struct dwc3 *dwc);
-int dwc3_gadget_suspend(struct dwc3 *dwc);
-int dwc3_gadget_resume(struct dwc3 *dwc);
 
 #endif /* __DRIVERS_USB_DWC3_CORE_H */

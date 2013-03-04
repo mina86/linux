@@ -2209,6 +2209,7 @@ net2272_remove(struct net2272 *dev)
 	free_irq(dev->irq, dev);
 	iounmap(dev->base_addr);
 
+	device_unregister(&dev->gadget.dev);
 	device_remove_file(dev->dev, &dev_attr_registers);
 
 	dev_info(dev->dev, "unbind\n");
@@ -2235,6 +2236,7 @@ static struct net2272 *net2272_probe_init(struct device *dev, unsigned int irq)
 	ret->gadget.max_speed = USB_SPEED_HIGH;
 
 	/* the "gadget" abstracts/virtualizes the controller */
+	dev_set_name(&ret->gadget.dev, "gadget");
 	ret->gadget.dev.parent = dev;
 	ret->gadget.dev.dma_mask = dev->dma_mask;
 	ret->gadget.dev.release = net2272_gadget_release;
@@ -2273,9 +2275,12 @@ net2272_probe_fin(struct net2272 *dev, unsigned int irqflags)
 		dma_mode_string());
 	dev_info(dev->dev, "version: %s\n", driver_vers);
 
-	ret = device_create_file(dev->dev, &dev_attr_registers);
+	ret = device_register(&dev->gadget.dev);
 	if (ret)
 		goto err_irq;
+	ret = device_create_file(dev->dev, &dev_attr_registers);
+	if (ret)
+		goto err_dev_reg;
 
 	ret = usb_add_gadget_udc(dev->dev, &dev->gadget);
 	if (ret)
@@ -2285,6 +2290,8 @@ net2272_probe_fin(struct net2272 *dev, unsigned int irqflags)
 
 err_add_udc:
 	device_remove_file(dev->dev, &dev_attr_registers);
+ err_dev_reg:
+	device_unregister(&dev->gadget.dev);
  err_irq:
 	free_irq(dev->irq, dev);
  err:

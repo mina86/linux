@@ -237,7 +237,18 @@ static void done(struct mv_ep *ep, struct mv_req *req, int status)
 		dma_pool_free(udc->dtd_pool, curr_td, curr_td->td_dma);
 	}
 
-	usb_gadget_unmap_request(&udc->gadget, &req->req, ep_dir(ep));
+	if (req->mapped) {
+		dma_unmap_single(ep->udc->gadget.dev.parent,
+			req->req.dma, req->req.length,
+			((ep_dir(ep) == EP_DIR_IN) ?
+				DMA_TO_DEVICE : DMA_FROM_DEVICE));
+		req->req.dma = DMA_ADDR_INVALID;
+		req->mapped = 0;
+	} else
+		dma_sync_single_for_cpu(ep->udc->gadget.dev.parent,
+			req->req.dma, req->req.length,
+			((ep_dir(ep) == EP_DIR_IN) ?
+				DMA_TO_DEVICE : DMA_FROM_DEVICE));
 
 	if (status && (status != -ESHUTDOWN))
 		dev_info(&udc->dev->dev, "complete %s req %p stat %d len %u/%u",
@@ -721,9 +732,21 @@ mv_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 	req->ep = ep;
 
 	/* map virtual address to hardware */
-	retval = usb_gadget_map_request(&udc->gadget, _req, ep_dir(ep));
-	if (retval)
-		return retval;
+	if (req->req.dma == DMA_ADDR_INVALID) {
+		req->req.dma = dma_map_single(ep->udc->gadget.dev.parent,
+					req->req.buf,
+					req->req.length, ep_dir(ep)
+						? DMA_TO_DEVICE
+						: DMA_FROM_DEVICE);
+		req->mapped = 1;
+	} else {
+		dma_sync_single_for_device(ep->udc->gadget.dev.parent,
+					req->req.dma, req->req.length,
+					ep_dir(ep)
+						? DMA_TO_DEVICE
+						: DMA_FROM_DEVICE);
+		req->mapped = 0;
+	}
 
 	req->req.status = -EINPROGRESS;
 	req->req.actual = 0;
@@ -757,7 +780,18 @@ mv_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 	return 0;
 
 err_unmap_dma:
-	usb_gadget_unmap_request(&udc->gadget, _req, ep_dir(ep));
+	if (req->mapped) {
+		dma_unmap_single(ep->udc->gadget.dev.parent,
+				req->req.dma, req->req.length,
+				((ep_dir(ep) == EP_DIR_IN) ?
+				DMA_TO_DEVICE : DMA_FROM_DEVICE));
+		req->req.dma = DMA_ADDR_INVALID;
+		req->mapped = 0;
+	} else
+		dma_sync_single_for_cpu(ep->udc->gadget.dev.parent,
+				req->req.dma, req->req.length,
+				((ep_dir(ep) == EP_DIR_IN) ?
+				DMA_TO_DEVICE : DMA_FROM_DEVICE));
 
 	return retval;
 }
@@ -1494,7 +1528,14 @@ udc_prime_status(struct mv_udc *udc, u8 direction, u16 status, bool empty)
 
 	return 0;
 out:
-	usb_gadget_unmap_request(&udc->gadget, &req->req, ep_dir(ep));
+	if (req->mapped) {
+		dma_unmap_single(ep->udc->gadget.dev.parent,
+				req->req.dma, req->req.length,
+				((ep_dir(ep) == EP_DIR_IN) ?
+				DMA_TO_DEVICE : DMA_FROM_DEVICE));
+		req->req.dma = DMA_ADDR_INVALID;
+		req->mapped = 0;
+	}
 
 	return retval;
 }
@@ -2097,6 +2138,8 @@ static int mv_udc_remove(struct platform_device *pdev)
 
 	mv_udc_disable(udc);
 
+	device_unregister(&udc->gadget.dev);
+
 	/* free dev, wait for the release() finished */
 	wait_for_completion(udc->done);
 
@@ -2268,10 +2311,15 @@ static int mv_udc_probe(struct platform_device *pdev)
 	udc->gadget.max_speed = USB_SPEED_HIGH;	/* support dual speed */
 
 	/* the "gadget" abstracts/virtualizes the controller */
+	dev_set_name(&udc->gadget.dev, "gadget");
 	udc->gadget.dev.parent = &pdev->dev;
 	udc->gadget.dev.dma_mask = pdev->dev.dma_mask;
 	udc->gadget.dev.release = gadget_release;
 	udc->gadget.name = driver_name;		/* gadget name */
+
+	retval = device_register(&udc->gadget.dev);
+	if (retval)
+		goto err_destroy_dma;
 
 	eps_init(udc);
 
@@ -2294,7 +2342,7 @@ static int mv_udc_probe(struct platform_device *pdev)
 		if (!udc->qwork) {
 			dev_err(&pdev->dev, "cannot create workqueue\n");
 			retval = -ENOMEM;
-			goto err_destroy_dma;
+			goto err_unregister;
 		}
 
 		INIT_WORK(&udc->vbus_work, mv_udc_vbus_work);
@@ -2322,6 +2370,8 @@ static int mv_udc_probe(struct platform_device *pdev)
 
 err_create_workqueue:
 	destroy_workqueue(udc->qwork);
+err_unregister:
+	device_unregister(&udc->gadget.dev);
 err_destroy_dma:
 	dma_pool_destroy(udc->dtd_pool);
 err_free_dma:
