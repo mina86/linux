@@ -52,7 +52,6 @@
 #include <linux/of_platform.h>
 
 #include <linux/usb/otg.h>
-#include <linux/usb/nop-usb-xceiv.h>
 
 /*
  * All these registers belong to OMAP's Wrapper around the
@@ -117,15 +116,12 @@ struct dwc3_omap {
 	/* device lock */
 	spinlock_t		lock;
 
-	struct platform_device	*usb2_phy;
-	struct platform_device	*usb3_phy;
 	struct device		*dev;
 
 	int			irq;
 	void __iomem		*base;
 
-	void			*context;
-	u32			resource_size;
+	u32			utmi_otg_status;
 
 	u32			dma_status:1;
 };
@@ -193,60 +189,6 @@ void dwc3_omap_mailbox(enum omap_dwc3_vbus_id_status status)
 }
 EXPORT_SYMBOL_GPL(dwc3_omap_mailbox);
 
-static int dwc3_omap_register_phys(struct dwc3_omap *omap)
-{
-	struct nop_usb_xceiv_platform_data pdata;
-	struct platform_device	*pdev;
-	int			ret;
-
-	memset(&pdata, 0x00, sizeof(pdata));
-
-	pdev = platform_device_alloc("nop_usb_xceiv", PLATFORM_DEVID_AUTO);
-	if (!pdev)
-		return -ENOMEM;
-
-	omap->usb2_phy = pdev;
-	pdata.type = USB_PHY_TYPE_USB2;
-
-	ret = platform_device_add_data(omap->usb2_phy, &pdata, sizeof(pdata));
-	if (ret)
-		goto err1;
-
-	pdev = platform_device_alloc("nop_usb_xceiv", PLATFORM_DEVID_AUTO);
-	if (!pdev) {
-		ret = -ENOMEM;
-		goto err1;
-	}
-
-	omap->usb3_phy = pdev;
-	pdata.type = USB_PHY_TYPE_USB3;
-
-	ret = platform_device_add_data(omap->usb3_phy, &pdata, sizeof(pdata));
-	if (ret)
-		goto err2;
-
-	ret = platform_device_add(omap->usb2_phy);
-	if (ret)
-		goto err2;
-
-	ret = platform_device_add(omap->usb3_phy);
-	if (ret)
-		goto err3;
-
-	return 0;
-
-err3:
-	platform_device_del(omap->usb2_phy);
-
-err2:
-	platform_device_put(omap->usb3_phy);
-
-err1:
-	platform_device_put(omap->usb2_phy);
-
-	return ret;
-}
-
 static irqreturn_t dwc3_omap_interrupt(int irq, void *_omap)
 {
 	struct dwc3_omap	*omap = _omap;
@@ -307,24 +249,55 @@ static int dwc3_omap_remove_core(struct device *dev, void *c)
 	return 0;
 }
 
+static void dwc3_omap_enable_irqs(struct dwc3_omap *omap)
+{
+	u32			reg;
+
+	/* enable all IRQs */
+	reg = USBOTGSS_IRQO_COREIRQ_ST;
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_0, reg);
+
+	reg = (USBOTGSS_IRQ1_OEVT |
+			USBOTGSS_IRQ1_DRVVBUS_RISE |
+			USBOTGSS_IRQ1_CHRGVBUS_RISE |
+			USBOTGSS_IRQ1_DISCHRGVBUS_RISE |
+			USBOTGSS_IRQ1_IDPULLUP_RISE |
+			USBOTGSS_IRQ1_DRVVBUS_FALL |
+			USBOTGSS_IRQ1_CHRGVBUS_FALL |
+			USBOTGSS_IRQ1_DISCHRGVBUS_FALL |
+			USBOTGSS_IRQ1_IDPULLUP_FALL);
+
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_1, reg);
+}
+
+static void dwc3_omap_disable_irqs(struct dwc3_omap *omap)
+{
+	/* disable all IRQs */
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_1, 0x00);
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_0, 0x00);
+}
+
 static int dwc3_omap_probe(struct platform_device *pdev)
 {
-	struct dwc3_omap_data	*pdata = pdev->dev.platform_data;
 	struct device_node	*node = pdev->dev.of_node;
 
 	struct dwc3_omap	*omap;
 	struct resource		*res;
 	struct device		*dev = &pdev->dev;
 
-	int			size;
 	int			ret = -ENOMEM;
 	int			irq;
 
-	const u32		*utmi_mode;
+	int			utmi_mode = 0;
+
 	u32			reg;
 
 	void __iomem		*base;
-	void			*context;
+
+	if (!node) {
+		dev_err(dev, "device node not found\n");
+		return -EINVAL;
+	}
 
 	omap = devm_kzalloc(dev, sizeof(*omap), GFP_KERNEL);
 	if (!omap) {
@@ -334,13 +307,13 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, omap);
 
-	irq = platform_get_irq(pdev, 1);
+	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		dev_err(dev, "missing IRQ resource\n");
 		return -EINVAL;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
 		dev_err(dev, "missing memory base resource\n");
 		return -EINVAL;
@@ -352,22 +325,8 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	ret = dwc3_omap_register_phys(omap);
-	if (ret) {
-		dev_err(dev, "couldn't register PHYs\n");
-		return ret;
-	}
-
-	context = devm_kzalloc(dev, resource_size(res), GFP_KERNEL);
-	if (!context) {
-		dev_err(dev, "couldn't allocate dwc3 context memory\n");
-		return -ENOMEM;
-	}
-
 	spin_lock_init(&omap->lock);
 
-	omap->resource_size = resource_size(res);
-	omap->context	= context;
 	omap->dev	= dev;
 	omap->irq	= irq;
 	omap->base	= base;
@@ -387,25 +346,17 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 
 	reg = dwc3_omap_readl(omap->base, USBOTGSS_UTMI_OTG_STATUS);
 
-	utmi_mode = of_get_property(node, "utmi-mode", &size);
-	if (utmi_mode && size == sizeof(*utmi_mode)) {
-		reg |= *utmi_mode;
-	} else {
-		if (!pdata) {
-			dev_dbg(dev, "missing platform data\n");
-		} else {
-			switch (pdata->utmi_mode) {
-			case DWC3_OMAP_UTMI_MODE_SW:
-				reg |= USBOTGSS_UTMI_OTG_STATUS_SW_MODE;
-				break;
-			case DWC3_OMAP_UTMI_MODE_HW:
-				reg &= ~USBOTGSS_UTMI_OTG_STATUS_SW_MODE;
-				break;
-			default:
-				dev_dbg(dev, "UNKNOWN utmi mode %d\n",
-						pdata->utmi_mode);
-			}
-		}
+	of_property_read_u32(node, "utmi-mode", &utmi_mode);
+
+	switch (utmi_mode) {
+	case DWC3_OMAP_UTMI_MODE_SW:
+		reg |= USBOTGSS_UTMI_OTG_STATUS_SW_MODE;
+		break;
+	case DWC3_OMAP_UTMI_MODE_HW:
+		reg &= ~USBOTGSS_UTMI_OTG_STATUS_SW_MODE;
+		break;
+	default:
+		dev_dbg(dev, "UNKNOWN utmi mode %d\n", utmi_mode);
 	}
 
 	dwc3_omap_writel(omap->base, USBOTGSS_UTMI_OTG_STATUS, reg);
@@ -422,29 +373,12 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	/* enable all IRQs */
-	reg = USBOTGSS_IRQO_COREIRQ_ST;
-	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_0, reg);
+	dwc3_omap_enable_irqs(omap);
 
-	reg = (USBOTGSS_IRQ1_OEVT |
-			USBOTGSS_IRQ1_DRVVBUS_RISE |
-			USBOTGSS_IRQ1_CHRGVBUS_RISE |
-			USBOTGSS_IRQ1_DISCHRGVBUS_RISE |
-			USBOTGSS_IRQ1_IDPULLUP_RISE |
-			USBOTGSS_IRQ1_DRVVBUS_FALL |
-			USBOTGSS_IRQ1_CHRGVBUS_FALL |
-			USBOTGSS_IRQ1_DISCHRGVBUS_FALL |
-			USBOTGSS_IRQ1_IDPULLUP_FALL);
-
-	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_1, reg);
-
-	if (node) {
-		ret = of_platform_populate(node, NULL, NULL, dev);
-		if (ret) {
-			dev_err(&pdev->dev,
-				"failed to add create dwc3 core\n");
-			return ret;
-		}
+	ret = of_platform_populate(node, NULL, NULL, dev);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to create dwc3 core\n");
+		return ret;
 	}
 
 	return 0;
@@ -454,8 +388,7 @@ static int dwc3_omap_remove(struct platform_device *pdev)
 {
 	struct dwc3_omap	*omap = platform_get_drvdata(pdev);
 
-	platform_device_unregister(omap->usb2_phy);
-	platform_device_unregister(omap->usb3_phy);
+	dwc3_omap_disable_irqs(omap);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 	device_for_each_child(&pdev->dev, NULL, dwc3_omap_remove_core);
@@ -465,11 +398,64 @@ static int dwc3_omap_remove(struct platform_device *pdev)
 
 static const struct of_device_id of_dwc3_match[] = {
 	{
-		"ti,dwc3",
+		.compatible =	"ti,dwc3"
 	},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, of_dwc3_match);
+
+#ifdef CONFIG_PM
+static int dwc3_omap_prepare(struct device *dev)
+{
+	struct dwc3_omap	*omap = dev_get_drvdata(dev);
+
+	dwc3_omap_disable_irqs(omap);
+
+	return 0;
+}
+
+static void dwc3_omap_complete(struct device *dev)
+{
+	struct dwc3_omap	*omap = dev_get_drvdata(dev);
+
+	dwc3_omap_enable_irqs(omap);
+}
+
+static int dwc3_omap_suspend(struct device *dev)
+{
+	struct dwc3_omap	*omap = dev_get_drvdata(dev);
+
+	omap->utmi_otg_status = dwc3_omap_readl(omap->base,
+			USBOTGSS_UTMI_OTG_STATUS);
+
+	return 0;
+}
+
+static int dwc3_omap_resume(struct device *dev)
+{
+	struct dwc3_omap	*omap = dev_get_drvdata(dev);
+
+	dwc3_omap_writel(omap->base, USBOTGSS_UTMI_OTG_STATUS,
+			omap->utmi_otg_status);
+
+	pm_runtime_disable(dev);
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+
+	return 0;
+}
+
+static const struct dev_pm_ops dwc3_omap_dev_pm_ops = {
+	.prepare	= dwc3_omap_prepare,
+	.complete	= dwc3_omap_complete,
+
+	SET_SYSTEM_SLEEP_PM_OPS(dwc3_omap_suspend, dwc3_omap_resume)
+};
+
+#define DEV_PM_OPS	(&dwc3_omap_dev_pm_ops)
+#else
+#define DEV_PM_OPS	NULL
+#endif /* CONFIG_PM */
 
 static struct platform_driver dwc3_omap_driver = {
 	.probe		= dwc3_omap_probe,
@@ -477,6 +463,7 @@ static struct platform_driver dwc3_omap_driver = {
 	.driver		= {
 		.name	= "omap-dwc3",
 		.of_match_table	= of_dwc3_match,
+		.pm	= DEV_PM_OPS,
 	},
 };
 

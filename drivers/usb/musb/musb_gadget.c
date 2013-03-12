@@ -46,52 +46,7 @@
 #include "musb_core.h"
 
 
-/* MUSB PERIPHERAL status 3-mar-2006:
- *
- * - EP0 seems solid.  It passes both USBCV and usbtest control cases.
- *   Minor glitches:
- *
- *     + remote wakeup to Linux hosts work, but saw USBCV failures;
- *       in one test run (operator error?)
- *     + endpoint halt tests -- in both usbtest and usbcv -- seem
- *       to break when dma is enabled ... is something wrongly
- *       clearing SENDSTALL?
- *
- * - Mass storage behaved ok when last tested.  Network traffic patterns
- *   (with lots of short transfers etc) need retesting; they turn up the
- *   worst cases of the DMA, since short packets are typical but are not
- *   required.
- *
- * - TX/IN
- *     + both pio and dma behave in with network and g_zero tests
- *     + no cppi throughput issues other than no-hw-queueing
- *     + failed with FLAT_REG (DaVinci)
- *     + seems to behave with double buffering, PIO -and- CPPI
- *     + with gadgetfs + AIO, requests got lost?
- *
- * - RX/OUT
- *     + both pio and dma behave in with network and g_zero tests
- *     + dma is slow in typical case (short_not_ok is clear)
- *     + double buffering ok with PIO
- *     + double buffering *FAILS* with CPPI, wrong data bytes sometimes
- *     + request lossage observed with gadgetfs
- *
- * - ISO not tested ... might work, but only weakly isochronous
- *
- * - Gadget driver disabling of softconnect during bind() is ignored; so
- *   drivers can't hold off host requests until userspace is ready.
- *   (Workaround:  they can turn it off later.)
- *
- * - PORTABILITY (assumes PIO works):
- *     + DaVinci, basically works with cppi dma
- *     + OMAP 2430, ditto with mentor dma
- *     + TUSB 6010, platform-specific dma in the works
- */
-
 /* ----------------------------------------------------------------------- */
-
-#define is_buffer_mapped(req) (is_dma_capable() && \
-					(req->map_state != UN_MAPPED))
 
 /* Maps the buffer to dma  */
 
@@ -100,8 +55,6 @@ static inline void map_dma_buffer(struct musb_request *request,
 {
 	int compatible = true;
 	struct dma_controller *dma = musb->dma_controller;
-
-	request->map_state = UN_MAPPED;
 
 	if (!is_dma_capable() || !musb_ep->dma)
 		return;
@@ -117,55 +70,14 @@ static inline void map_dma_buffer(struct musb_request *request,
 	if (!compatible)
 		return;
 
-	if (request->request.dma == DMA_ADDR_INVALID) {
-		request->request.dma = dma_map_single(
-				musb->controller,
-				request->request.buf,
-				request->request.length,
-				request->tx
-					? DMA_TO_DEVICE
-					: DMA_FROM_DEVICE);
-		request->map_state = MUSB_MAPPED;
-	} else {
-		dma_sync_single_for_device(musb->controller,
-			request->request.dma,
-			request->request.length,
-			request->tx
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
-		request->map_state = PRE_MAPPED;
-	}
+	(void) usb_gadget_map_request(&musb->g, &request->request, request->tx);
 }
 
 /* Unmap the buffer from dma and maps it back to cpu */
 static inline void unmap_dma_buffer(struct musb_request *request,
 				struct musb *musb)
 {
-	if (!is_buffer_mapped(request))
-		return;
-
-	if (request->request.dma == DMA_ADDR_INVALID) {
-		dev_vdbg(musb->controller,
-				"not unmapping a never mapped buffer\n");
-		return;
-	}
-	if (request->map_state == MUSB_MAPPED) {
-		dma_unmap_single(musb->controller,
-			request->request.dma,
-			request->request.length,
-			request->tx
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
-		request->request.dma = DMA_ADDR_INVALID;
-	} else { /* PRE_MAPPED */
-		dma_sync_single_for_cpu(musb->controller,
-			request->request.dma,
-			request->request.length,
-			request->tx
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
-	}
-	request->map_state = UN_MAPPED;
+	usb_gadget_unmap_request(&musb->g, &request->request, request->tx);
 }
 
 /*
@@ -275,41 +187,6 @@ static inline int max_ep_writesize(struct musb *musb, struct musb_ep *ep)
 		return ep->packet_sz;
 }
 
-
-#ifdef CONFIG_USB_INVENTRA_DMA
-
-/* Peripheral tx (IN) using Mentor DMA works as follows:
-	Only mode 0 is used for transfers <= wPktSize,
-	mode 1 is used for larger transfers,
-
-	One of the following happens:
-	- Host sends IN token which causes an endpoint interrupt
-		-> TxAvail
-			-> if DMA is currently busy, exit.
-			-> if queue is non-empty, txstate().
-
-	- Request is queued by the gadget driver.
-		-> if queue was previously empty, txstate()
-
-	txstate()
-		-> start
-		  /\	-> setup DMA
-		  |     (data is transferred to the FIFO, then sent out when
-		  |	IN token(s) are recd from Host.
-		  |		-> DMA interrupt on completion
-		  |		   calls TxAvail.
-		  |		      -> stop DMA, ~DMAENAB,
-		  |		      -> set TxPktRdy for last short pkt or zlp
-		  |		      -> Complete Request
-		  |		      -> Continue next request (call txstate)
-		  |___________________________________|
-
- * Non-Mentor DMA engines can of course work differently, such as by
- * upleveling from irq-per-packet to irq-per-buffer.
- */
-
-#endif
-
 /*
  * An endpoint is transmitting data. This can be called either from
  * the IRQ routine or from ep.queue() to kickstart a request on an
@@ -365,7 +242,7 @@ static void txstate(struct musb *musb, struct musb_request *req)
 			csr);
 
 #ifndef	CONFIG_MUSB_PIO_ONLY
-	if (is_buffer_mapped(req)) {
+	{
 		struct dma_controller	*c = musb->dma_controller;
 		size_t request_size;
 
@@ -616,37 +493,6 @@ void musb_g_tx(struct musb *musb, u8 epnum)
 
 /* ------------------------------------------------------------ */
 
-#ifdef CONFIG_USB_INVENTRA_DMA
-
-/* Peripheral rx (OUT) using Mentor DMA works as follows:
-	- Only mode 0 is used.
-
-	- Request is queued by the gadget class driver.
-		-> if queue was previously empty, rxstate()
-
-	- Host sends OUT token which causes an endpoint interrupt
-	  /\      -> RxReady
-	  |	      -> if request queued, call rxstate
-	  |		/\	-> setup DMA
-	  |		|	     -> DMA interrupt on completion
-	  |		|		-> RxReady
-	  |		|		      -> stop DMA
-	  |		|		      -> ack the read
-	  |		|		      -> if data recd = max expected
-	  |		|				by the request, or host
-	  |		|				sent a short packet,
-	  |		|				complete the request,
-	  |		|				and start the next one.
-	  |		|_____________________________________|
-	  |					 else just wait for the host
-	  |					    to send the next OUT token.
-	  |__________________________________________________|
-
- * Non-Mentor DMA engines can of course work differently.
- */
-
-#endif
-
 /*
  * Context: controller locked, IRQs blocked, endpoint selected
  */
@@ -688,7 +534,7 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 		return;
 	}
 
-	if (is_cppi_enabled() && is_buffer_mapped(req)) {
+	if (is_cppi_enabled()) {
 		struct dma_controller	*c = musb->dma_controller;
 		struct dma_channel	*channel = musb_ep->dma;
 
@@ -731,14 +577,13 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 
 		if (request->actual < request->length) {
 #ifdef CONFIG_USB_INVENTRA_DMA
-			if (is_buffer_mapped(req)) {
-				struct dma_controller	*c;
-				struct dma_channel	*channel;
-				int			use_dma = 0;
-				int transfer_size;
+			struct dma_controller	*c;
+			struct dma_channel	*channel;
+			int			use_dma = 0;
+			unsigned int		transfer_size;
 
-				c = musb->dma_controller;
-				channel = musb_ep->dma;
+			c = musb->dma_controller;
+			channel = musb_ep->dma;
 
 	/* We use DMA Req mode 0 in rx_csr, and DMA controller operates in
 	 * mode 0 only. So we do not get endpoint interrupts due to DMA
@@ -761,56 +606,54 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 	 * then becomes usable as a runtime "use mode 1" hint...
 	 */
 
-				/* Experimental: Mode1 works with mass storage use cases */
-				if (use_mode_1) {
-					csr |= MUSB_RXCSR_AUTOCLEAR;
-					musb_writew(epio, MUSB_RXCSR, csr);
-					csr |= MUSB_RXCSR_DMAENAB;
-					musb_writew(epio, MUSB_RXCSR, csr);
+			/* Experimental: Mode1 works with mass storage use cases */
+			if (use_mode_1) {
+				csr |= MUSB_RXCSR_AUTOCLEAR;
+				musb_writew(epio, MUSB_RXCSR, csr);
+				csr |= MUSB_RXCSR_DMAENAB;
+				musb_writew(epio, MUSB_RXCSR, csr);
 
-					/*
-					 * this special sequence (enabling and then
-					 * disabling MUSB_RXCSR_DMAMODE) is required
-					 * to get DMAReq to activate
-					 */
-					musb_writew(epio, MUSB_RXCSR,
+				/*
+				 * this special sequence (enabling and then
+				 * disabling MUSB_RXCSR_DMAMODE) is required
+				 * to get DMAReq to activate
+				 */
+				musb_writew(epio, MUSB_RXCSR,
 						csr | MUSB_RXCSR_DMAMODE);
-					musb_writew(epio, MUSB_RXCSR, csr);
+				musb_writew(epio, MUSB_RXCSR, csr);
 
-					transfer_size = min(request->length - request->actual,
-							channel->max_len);
-					musb_ep->dma->desired_mode = 1;
+				transfer_size = min_t(unsigned int,
+						request->length - request->actual,
+						channel->max_len);
+				musb_ep->dma->desired_mode = 1;
 
-				} else {
-					if (!musb_ep->hb_mult &&
+			} else {
+				if (!musb_ep->hb_mult &&
 						musb_ep->hw_ep->rx_double_buffered)
-						csr |= MUSB_RXCSR_AUTOCLEAR;
-					csr |= MUSB_RXCSR_DMAENAB;
-					musb_writew(epio, MUSB_RXCSR, csr);
+					csr |= MUSB_RXCSR_AUTOCLEAR;
+				csr |= MUSB_RXCSR_DMAENAB;
+				musb_writew(epio, MUSB_RXCSR, csr);
 
-					transfer_size = min(request->length - request->actual,
-							(unsigned)fifo_count);
-					musb_ep->dma->desired_mode = 0;
-				}
-
-				use_dma = c->channel_program(
-						channel,
-						musb_ep->packet_sz,
-						channel->desired_mode,
-						request->dma
-						+ request->actual,
-						transfer_size);
-
-				if (use_dma)
-					return;
+				transfer_size = min(request->length - request->actual,
+						(unsigned)fifo_count);
+				musb_ep->dma->desired_mode = 0;
 			}
-#elif defined(CONFIG_USB_UX500_DMA)
-			if ((is_buffer_mapped(req)) &&
-				(request->actual < request->length)) {
 
+			use_dma = c->channel_program(
+					channel,
+					musb_ep->packet_sz,
+					channel->desired_mode,
+					request->dma
+					+ request->actual,
+					transfer_size);
+
+			if (use_dma)
+				return;
+#elif defined(CONFIG_USB_UX500_DMA)
+			if (request->actual < request->length) {
 				struct dma_controller *c;
 				struct dma_channel *channel;
-				int transfer_size = 0;
+				unsigned int transfer_size = 0;
 
 				c = musb->dma_controller;
 				channel = musb_ep->dma;
@@ -819,11 +662,13 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 				if (fifo_count < musb_ep->packet_sz)
 					transfer_size = fifo_count;
 				else if (request->short_not_ok)
-					transfer_size =	min(request->length -
+					transfer_size =	min_t(unsigned int,
+							request->length -
 							request->actual,
 							channel->max_len);
 				else
-					transfer_size = min(request->length -
+					transfer_size = min_t(unsigned int,
+							request->length -
 							request->actual,
 							(unsigned)fifo_count);
 
@@ -862,7 +707,7 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 			fifo_count = min_t(unsigned, len, fifo_count);
 
 #ifdef	CONFIG_USB_TUSB_OMAP_DMA
-			if (tusb_dma_omap() && is_buffer_mapped(req)) {
+			if (tusb_dma_omap()) {
 				struct dma_controller *c = musb->dma_controller;
 				struct dma_channel *channel = musb_ep->dma;
 				u32 dma_addr = request->dma + request->actual;
@@ -882,16 +727,14 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 			 * programming fails. This buffer is mapped if the
 			 * channel allocation is successful
 			 */
-			 if (is_buffer_mapped(req)) {
-				unmap_dma_buffer(req, musb);
+			unmap_dma_buffer(req, musb);
 
-				/*
-				 * Clear DMAENAB and AUTOCLEAR for the
-				 * PIO mode transfer
-				 */
-				csr &= ~(MUSB_RXCSR_DMAENAB | MUSB_RXCSR_AUTOCLEAR);
-				musb_writew(epio, MUSB_RXCSR, csr);
-			}
+			/*
+			 * Clear DMAENAB and AUTOCLEAR for the
+			 * PIO mode transfer
+			 */
+			csr &= ~(MUSB_RXCSR_DMAENAB | MUSB_RXCSR_AUTOCLEAR);
+			musb_writew(epio, MUSB_RXCSR, csr);
 
 			musb_read_fifo(musb_ep->hw_ep, fifo_count, (u8 *)
 					(request->buf + request->actual));
@@ -1676,7 +1519,7 @@ static int musb_gadget_wakeup(struct usb_gadget *gadget)
 		goto done;
 	default:
 		dev_dbg(musb->controller, "Unhandled wake: %s\n",
-			otg_state_string(musb->xceiv->state));
+			usb_otg_state_string(musb->xceiv->state));
 		goto done;
 	}
 
@@ -1796,13 +1639,6 @@ static const struct usb_gadget_ops musb_gadget_operations = {
  * all peripheral ports are external...
  */
 
-static void musb_gadget_release(struct device *dev)
-{
-	/* kref_put(WHAT) */
-	dev_dbg(dev, "%s\n", __func__);
-}
-
-
 static void
 init_peripheral_ep(struct musb *musb, struct musb_ep *ep, u8 epnum, int is_in)
 {
@@ -1887,12 +1723,7 @@ int musb_gadget_setup(struct musb *musb)
 	musb->g.speed = USB_SPEED_UNKNOWN;
 
 	/* this "gadget" abstracts/virtualizes the controller */
-	dev_set_name(&musb->g.dev, "gadget");
-	musb->g.dev.parent = musb->controller;
-	musb->g.dev.dma_mask = musb->controller->dma_mask;
-	musb->g.dev.release = musb_gadget_release;
 	musb->g.name = musb_driver_name;
-
 	musb->g.is_otg = 1;
 
 	musb_g_init_endpoints(musb);
@@ -1900,11 +1731,6 @@ int musb_gadget_setup(struct musb *musb)
 	musb->is_active = 0;
 	musb_platform_try_idle(musb, 0);
 
-	status = device_register(&musb->g.dev);
-	if (status != 0) {
-		put_device(&musb->g.dev);
-		return status;
-	}
 	status = usb_add_gadget_udc(musb->controller, &musb->g);
 	if (status)
 		goto err;
@@ -1919,8 +1745,6 @@ err:
 void musb_gadget_cleanup(struct musb *musb)
 {
 	usb_del_gadget_udc(&musb->g);
-	if (musb->g.dev.parent)
-		device_unregister(&musb->g.dev);
 }
 
 /*
@@ -2094,7 +1918,7 @@ void musb_g_resume(struct musb *musb)
 		break;
 	default:
 		WARNING("unhandled RESUME transition (%s)\n",
-				otg_state_string(musb->xceiv->state));
+				usb_otg_state_string(musb->xceiv->state));
 	}
 }
 
@@ -2124,7 +1948,7 @@ void musb_g_suspend(struct musb *musb)
 		 * A_PERIPHERAL may need care too
 		 */
 		WARNING("unhandled SUSPEND transition (%s)\n",
-				otg_state_string(musb->xceiv->state));
+				usb_otg_state_string(musb->xceiv->state));
 	}
 }
 
@@ -2158,7 +1982,7 @@ void musb_g_disconnect(struct musb *musb)
 	switch (musb->xceiv->state) {
 	default:
 		dev_dbg(musb->controller, "Unhandled disconnect %s, setting a_idle\n",
-			otg_state_string(musb->xceiv->state));
+			usb_otg_state_string(musb->xceiv->state));
 		musb->xceiv->state = OTG_STATE_A_IDLE;
 		MUSB_HST_MODE(musb);
 		break;
