@@ -58,7 +58,6 @@ static const char * const ep_name[] = {
 	"ep-a", "ep-b", "ep-c",
 };
 
-#define DMA_ADDR_INVALID	(~(dma_addr_t)0)
 #ifdef CONFIG_USB_GADGET_NET2272_DMA
 /*
  * use_dma: the NET2272 can use an external DMA controller.
@@ -341,7 +340,6 @@ net2272_alloc_request(struct usb_ep *_ep, gfp_t gfp_flags)
 	if (!req)
 		return NULL;
 
-	req->req.dma = DMA_ADDR_INVALID;
 	INIT_LIST_HEAD(&req->queue);
 
 	return &req->req;
@@ -1493,6 +1491,13 @@ stop_activity(struct net2272 *dev, struct usb_gadget_driver *driver)
 	net2272_usb_reset(dev);
 	for (i = 0; i < 4; ++i)
 		net2272_dequeue_all(&dev->ep[i]);
+
+	/* report disconnect; the driver is already quiesced */
+	if (driver) {
+		spin_unlock(&dev->lock);
+		driver->disconnect(&dev->gadget);
+		spin_lock(&dev->lock);
+	}
 
 	net2272_usb_reinit(dev);
 }

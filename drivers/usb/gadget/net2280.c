@@ -65,7 +65,6 @@
 #define	DRIVER_DESC		"PLX NET228x USB Peripheral Controller"
 #define	DRIVER_VERSION		"2005 Sept 27"
 
-#define	DMA_ADDR_INVALID	(~(dma_addr_t)0)
 #define	EP_DONTUSE		13	/* nonzero */
 
 #define USE_RDK_LEDS		/* GPIO pins control three LEDs */
@@ -406,7 +405,6 @@ net2280_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 	if (!req)
 		return NULL;
 
-	req->req.dma = DMA_ADDR_INVALID;
 	INIT_LIST_HEAD (&req->queue);
 
 	/* this dma descriptor may be swapped with the previous dummy */
@@ -420,7 +418,6 @@ net2280_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 			return NULL;
 		}
 		td->dmacount = 0;	/* not VALID */
-		td->dmaaddr = cpu_to_le32 (DMA_ADDR_INVALID);
 		td->dmadesc = td->dmaaddr;
 		req->td = td;
 	}
@@ -1923,7 +1920,6 @@ static int net2280_start(struct usb_gadget *_gadget,
 err_func:
 	device_remove_file (&dev->pdev->dev, &dev_attr_function);
 err_unbind:
-	driver->unbind (&dev->gadget);
 	dev->driver = NULL;
 	return retval;
 }
@@ -1943,6 +1939,13 @@ stop_activity (struct net2280 *dev, struct usb_gadget_driver *driver)
 	usb_reset (dev);
 	for (i = 0; i < 7; i++)
 		nuke (&dev->ep [i]);
+
+	/* report disconnect; the driver is already quiesced */
+	if (driver) {
+		spin_unlock (&dev->lock);
+		driver->disconnect (&dev->gadget);
+		spin_lock (&dev->lock);
+	}
 
 	usb_reinit (dev);
 }
@@ -2788,7 +2791,6 @@ static int net2280_probe (struct pci_dev *pdev, const struct pci_device_id *id)
 			goto done;
 		}
 		td->dmacount = 0;	/* not VALID */
-		td->dmaaddr = cpu_to_le32 (DMA_ADDR_INVALID);
 		td->dmadesc = td->dmaaddr;
 		dev->ep [i].dummy = td;
 	}
