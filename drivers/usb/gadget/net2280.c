@@ -1942,9 +1942,9 @@ stop_activity (struct net2280 *dev, struct usb_gadget_driver *driver)
 
 	/* report disconnect; the driver is already quiesced */
 	if (driver) {
-		spin_unlock (&dev->lock);
-		driver->disconnect (&dev->gadget);
-		spin_lock (&dev->lock);
+		spin_unlock(&dev->lock);
+		driver->disconnect(&dev->gadget);
+		spin_lock(&dev->lock);
 	}
 
 	usb_reinit (dev);
