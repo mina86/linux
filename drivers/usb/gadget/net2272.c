@@ -58,7 +58,7 @@ static const char * const ep_name[] = {
 	"ep-a", "ep-b", "ep-c",
 };
 
-#ifdef CONFIG_USB_GADGET_NET2272_DMA
+#ifdef CONFIG_USB_NET2272_DMA
 /*
  * use_dma: the NET2272 can use an external DMA controller.
  * Note that since there is no generic DMA api, some functions,
