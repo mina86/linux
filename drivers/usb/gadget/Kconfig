@@ -494,6 +494,7 @@ endmenu
 # composite based drivers
 config USB_LIBCOMPOSITE
 	tristate
+	select CONFIGFS_FS
 	depends on USB_GADGET
 
 config USB_F_ACM
@@ -503,6 +504,12 @@ config USB_F_SS_LB
 	tristate
 
 config USB_U_SERIAL
+	tristate
+
+config USB_F_SERIAL
+	tristate
+
+config USB_F_OBEX
 	tristate
 
 choice
@@ -759,6 +766,8 @@ config USB_G_SERIAL
 	depends on TTY
 	select USB_U_SERIAL
 	select USB_F_ACM
+	select USB_F_SERIAL
+	select USB_F_OBEX
 	select USB_LIBCOMPOSITE
 	help
 	  The Serial Gadget talks to the Linux-USB generic serial driver.
@@ -832,6 +841,7 @@ config USB_G_NOKIA
 	depends on PHONET
 	select USB_LIBCOMPOSITE
 	select USB_U_SERIAL
+	select USB_F_ACM
 	help
 	  The Nokia composite gadget provides support for acm, obex
 	  and phonet in only one composite gadget driver.
