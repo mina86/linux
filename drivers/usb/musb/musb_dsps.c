@@ -415,9 +415,14 @@ static int dsps_musb_init(struct musb *musb)
 	/* mentor core register starts at offset of 0x400 from musb base */
 	musb->mregs += wrp->musb_core_offset;
 
-	/* NOP driver needs change if supporting dual instance */
-	usb_nop_xceiv_register();
-	musb->xceiv = usb_get_phy(USB_PHY_TYPE_USB2);
+	if (!glue->dev->of_node) {
+		/* This hack works only for a single instance. */
+		usb_nop_xceiv_register();
+		musb->xceiv = usb_get_phy(USB_PHY_TYPE_USB2);
+	} else {
+		musb->xceiv = devm_usb_get_phy_by_phandle(glue->dev, "phys",
+				musb->config->instance);
+	}
 	if (IS_ERR_OR_NULL(musb->xceiv))
 		return -EPROBE_DEFER;
 
@@ -449,7 +454,8 @@ static int dsps_musb_init(struct musb *musb)
 	return 0;
 err0:
 	usb_put_phy(musb->xceiv);
-	usb_nop_xceiv_unregister();
+	if (!glue->dev->of_node)
+		usb_nop_xceiv_unregister();
 	return status;
 }
 
@@ -466,7 +472,8 @@ static int dsps_musb_exit(struct musb *musb)
 
 	/* NOP driver needs change if supporting dual instance */
 	usb_put_phy(musb->xceiv);
-	usb_nop_xceiv_unregister();
+	if (!glue->dev->of_node)
+		usb_nop_xceiv_unregister();
 
 	return 0;
 }
@@ -570,6 +577,7 @@ static int dsps_create_musb_pdev(struct dsps_glue *glue, u8 id)
 		of_property_read_u32(np, res_name, (u32 *)&pdata->mode);
 		of_property_read_u32(np, "power", (u32 *)&pdata->power);
 		config->multipoint = of_property_read_bool(np, "multipoint");
+		config->instance = id;
 
 		pdata->config		= config;
 	}
