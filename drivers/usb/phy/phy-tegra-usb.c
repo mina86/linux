@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/export.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/gpio.h>
@@ -31,10 +32,18 @@
 #include <linux/usb/otg.h>
 #include <linux/usb/ulpi.h>
 #include <asm/mach-types.h>
+#include <linux/usb/ehci_def.h>
 #include <linux/usb/tegra_usb_phy.h>
-#include <linux/module.h>
 
 #define ULPI_VIEWPORT		0x170
+
+/* PORTSC registers */
+#define TEGRA_USB_PORTSC1				0x184
+#define TEGRA_USB_PORTSC1_PTS(x)			(((x) & 0x3) << 30)
+#define TEGRA_USB_PORTSC1_PHCD				(1 << 23)
+
+/* Bits of PORTSC1, which will get cleared by writing 1 into them */
+#define TEGRA_PORTSC1_RWC_BITS	(PORT_CSC | PORT_PEC | PORT_OCC)
 
 #define USB_SUSP_CTRL		0x400
 #define   USB_WAKE_ON_CNNT_EN_DEV	(1 << 3)
@@ -196,6 +205,30 @@ static struct tegra_utmip_config utmip_default[] = {
 	},
 };
 
+static void set_pts(struct tegra_usb_phy *phy, u8 pts_val)
+{
+	void __iomem *base = phy->regs;
+	unsigned long val;
+
+	val = readl(base + TEGRA_USB_PORTSC1) & ~TEGRA_PORTSC1_RWC_BITS;
+	val &= ~TEGRA_USB_PORTSC1_PTS(3);
+	val |= TEGRA_USB_PORTSC1_PTS(pts_val & 3);
+	writel(val, base + TEGRA_USB_PORTSC1);
+}
+
+static void set_phcd(struct tegra_usb_phy *phy, bool enable)
+{
+	void __iomem *base = phy->regs;
+	unsigned long val;
+
+	val = readl(base + TEGRA_USB_PORTSC1) & ~TEGRA_PORTSC1_RWC_BITS;
+	if (enable)
+		val |= TEGRA_USB_PORTSC1_PHCD;
+	else
+		val &= ~TEGRA_USB_PORTSC1_PHCD;
+	writel(val, base + TEGRA_USB_PORTSC1);
+}
+
 static int utmip_pad_open(struct tegra_usb_phy *phy)
 {
 	phy->pad_clk = devm_clk_get(phy->dev, "utmi-pads");
@@ -282,7 +315,7 @@ static void utmi_phy_clk_disable(struct tegra_usb_phy *phy)
 		val &= ~USB_SUSP_SET;
 		writel(val, base + USB_SUSP_CTRL);
 	} else
-		tegra_ehci_set_phcd(&phy->u_phy, true);
+		set_phcd(phy, true);
 
 	if (utmi_wait_register(base + USB_SUSP_CTRL, USB_PHY_CLK_VALID, 0) < 0)
 		pr_err("%s: timeout waiting for phy to stabilize\n", __func__);
@@ -304,7 +337,7 @@ static void utmi_phy_clk_enable(struct tegra_usb_phy *phy)
 		val &= ~USB_SUSP_CLR;
 		writel(val, base + USB_SUSP_CTRL);
 	} else
-		tegra_ehci_set_phcd(&phy->u_phy, false);
+		set_phcd(phy, false);
 
 	if (utmi_wait_register(base + USB_SUSP_CTRL, USB_PHY_CLK_VALID,
 						     USB_PHY_CLK_VALID))
@@ -427,7 +460,7 @@ static int utmi_phy_power_on(struct tegra_usb_phy *phy)
 	utmi_phy_clk_enable(phy);
 
 	if (!phy->is_legacy_phy)
-		tegra_ehci_set_pts(&phy->u_phy, 0);
+		set_pts(phy, 0);
 
 	return 0;
 }
@@ -869,3 +902,6 @@ struct usb_phy *tegra_usb_get_phy(struct device_node *dn)
 	return &tegra_phy->u_phy;
 }
 EXPORT_SYMBOL_GPL(tegra_usb_get_phy);
+
+MODULE_DESCRIPTION("Tegra USB PHY driver");
+MODULE_LICENSE("GPL v2");

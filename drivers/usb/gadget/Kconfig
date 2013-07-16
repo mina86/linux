@@ -155,7 +155,7 @@ config USB_LPC32XX
 
 config USB_ATMEL_USBA
 	tristate "Atmel USBA"
-	depends on AVR32 || ARCH_AT91SAM9RL || ARCH_AT91SAM9G45
+	depends on AVR32 || ARCH_AT91
 	help
 	  USBA is the integrated high-speed USB Device controller on
 	  the AT32AP700x, some AT91SAM9 and AT91CAP9 processors from Atmel.
@@ -193,6 +193,7 @@ config USB_FUSB300
 	   Faraday usb device controller FUSB300 driver
 
 config USB_FOTG210_UDC
+	depends on HAS_DMA
 	tristate "Faraday FOTG210 USB Peripheral Controller"
 	help
 	   Faraday USB2.0 OTG controller which can be configured as
@@ -328,13 +329,14 @@ config USB_S3C_HSUDC
 
 config USB_MV_UDC
 	tristate "Marvell USB2.0 Device Controller"
-	depends on GENERIC_HARDIRQS
+	depends on GENERIC_HARDIRQS && HAS_DMA
 	help
 	  Marvell Socs (including PXA and MMP series) include a high speed
 	  USB2.0 OTG controller, which can be configured as high speed or
 	  full speed USB peripheral.
 
 config USB_MV_U3D
+	depends on HAS_DMA
 	tristate "MARVELL PXA2128 USB 3.0 controller"
 	help
 	  MARVELL PXA2128 Processor series include a super speed USB3.0 device
@@ -560,6 +562,70 @@ choice
 
 # this first set of drivers all depend on bulk-capable hardware.
 
+config USB_CONFIGFS
+	tristate "USB functions configurable through configfs"
+	select USB_LIBCOMPOSITE
+	help
+	  A Linux USB "gadget" can be set up through configfs.
+	  If this is the case, the USB functions (which from the host's
+	  perspective are seen as interfaces) and configurations are
+	  specified simply by creating appropriate directories in configfs.
+	  Associating functions with configurations is done by creating
+	  appropriate symbolic links.
+	  For more information see Documentation/usb/gadget-configfs.txt.
+
+config USB_CONFIGFS_SERIAL
+	boolean "Generic serial bulk in/out"
+	depends on USB_CONFIGFS
+	depends on TTY
+	select USB_U_SERIAL
+	select USB_F_SERIAL
+	help
+	  The function talks to the Linux-USB generic serial driver.
+
+config USB_CONFIGFS_ACM
+	boolean "Abstract Control Model (CDC ACM)"
+	depends on USB_CONFIGFS
+	depends on TTY
+	select USB_U_SERIAL
+	select USB_F_ACM
+	help
+	  ACM serial link.  This function can be used to interoperate with
+	  MS-Windows hosts or with the Linux-USB "cdc-acm" driver.
+
+config USB_CONFIGFS_OBEX
+	boolean "Object Exchange Model (CDC OBEX)"
+	depends on USB_CONFIGFS
+	depends on TTY
+	select USB_U_SERIAL
+	select USB_F_OBEX
+	help
+	  You will need a user space OBEX server talking to /dev/ttyGS*,
+	  since the kernel itself doesn't implement the OBEX protocol.
+
+config USB_CONFIGFS_NCM
+	boolean "Network Control Model (CDC NCM)"
+	depends on USB_CONFIGFS
+	depends on NET
+	select USB_U_ETHER
+	select USB_F_NCM
+	help
+	  NCM is an advanced protocol for Ethernet encapsulation, allows
+	  grouping of several ethernet frames into one USB transfer and
+	  different alignment possibilities.
+
+config USB_CONFIGFS_ECM
+	boolean "Ethernet Control Model (CDC ECM)"
+	depends on USB_CONFIGFS
+	depends on NET
+	select USB_U_ETHER
+	select USB_F_ECM
+	help
+	  The "Communication Device Class" (CDC) Ethernet Control Model.
+	  That protocol is often avoided with pure Ethernet adapters, in
+	  favor of simpler vendor-specific hardware, but is widely
+	  supported by firmware for smart network devices.
+
 config USB_CONFIGFS_ECM_SUBSET
 	boolean "Ethernet Control Model (CDC ECM) subset"
 	depends on USB_CONFIGFS
@@ -575,6 +641,7 @@ config USB_CONFIGFS_RNDIS
 	depends on USB_CONFIGFS
 	depends on NET
 	select USB_U_ETHER
+	select USB_U_RNDIS
 	select USB_F_RNDIS
 	help
 	   Microsoft Windows XP bundles the "Remote NDIS" (RNDIS) protocol,
