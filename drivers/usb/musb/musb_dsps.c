@@ -46,9 +46,7 @@
 
 #include "musb_core.h"
 
-#ifdef CONFIG_OF
 static const struct of_device_id musb_dsps_of_match[];
-#endif
 
 /**
  * avoid using musb_readx()/musb_writex() as glue layer should not be
@@ -75,7 +73,6 @@ struct dsps_musb_wrapper {
 	u16	revision;
 	u16	control;
 	u16	status;
-	u16	eoi;
 	u16	epintr_set;
 	u16	epintr_clear;
 	u16	epintr_status;
@@ -110,8 +107,6 @@ struct dsps_musb_wrapper {
 	/* miscellaneous stuff */
 	u32		musb_core_offset;
 	u8		poll_seconds;
-	/* number of musb instances */
-	u8		instances;
 };
 
 /**
@@ -124,6 +119,7 @@ struct dsps_glue {
 	struct timer_list timer[2];	/* otg_workaround timer */
 	unsigned long last_timer[2];    /* last timer data for each instance */
 	u32 __iomem *usb_ctrl[2];
+	u8 instances;
 };
 
 #define	DSPS_AM33XX_CONTROL_MODULE_PHYS_0	0x44e10620
@@ -205,7 +201,6 @@ static void dsps_musb_disable(struct musb *musb)
 	dsps_writel(reg_base, wrp->epintr_clear,
 			 wrp->txep_bitmap | wrp->rxep_bitmap);
 	dsps_writeb(musb->mregs, MUSB_DEVCTL, 0);
-	dsps_writel(reg_base, wrp->eoi, 0);
 }
 
 static void otg_timer(unsigned long _musb)
@@ -319,7 +314,7 @@ static irqreturn_t dsps_interrupt(int irq, void *hci)
 	/* Get usb core interrupts */
 	usbintr = dsps_readl(reg_base, wrp->coreintr_status);
 	if (!usbintr && !epintr)
-		goto eoi;
+		goto out;
 
 	musb->int_usb =	(usbintr & wrp->usb_bitmap) >> wrp->usb_shift;
 	if (usbintr)
@@ -387,16 +382,12 @@ static irqreturn_t dsps_interrupt(int irq, void *hci)
 	if (musb->int_tx || musb->int_rx || musb->int_usb)
 		ret |= musb_interrupt(musb);
 
- eoi:
-	/* EOI needs to be written for the IRQ to be re-asserted. */
-	if (ret == IRQ_HANDLED || epintr || usbintr)
-		dsps_writel(reg_base, wrp->eoi, 1);
-
 	/* Poll for ID change */
 	if (musb->xceiv->state == OTG_STATE_B_IDLE)
 		mod_timer(&glue->timer[pdev->id],
 			 jiffies + wrp->poll_seconds * HZ);
 
+out:
 	spin_unlock_irqrestore(&musb->lock, flags);
 
 	return ret;
@@ -415,9 +406,14 @@ static int dsps_musb_init(struct musb *musb)
 	/* mentor core register starts at offset of 0x400 from musb base */
 	musb->mregs += wrp->musb_core_offset;
 
-	/* NOP driver needs change if supporting dual instance */
-	usb_nop_xceiv_register();
-	musb->xceiv = usb_get_phy(USB_PHY_TYPE_USB2);
+	if (!glue->dev->of_node) {
+		/* This hack works only for a single instance. */
+		usb_nop_xceiv_register();
+		musb->xceiv = usb_get_phy(USB_PHY_TYPE_USB2);
+	} else {
+		musb->xceiv = devm_usb_get_phy_by_phandle(glue->dev, "phys",
+				musb->config->instance);
+	}
 	if (IS_ERR_OR_NULL(musb->xceiv))
 		return -EPROBE_DEFER;
 
@@ -427,6 +423,8 @@ static int dsps_musb_init(struct musb *musb)
 		status = -ENODEV;
 		goto err0;
 	}
+
+	usb_phy_init(musb->xceiv);
 
 	setup_timer(&glue->timer[pdev->id], otg_timer, (unsigned long) musb);
 
@@ -443,13 +441,11 @@ static int dsps_musb_init(struct musb *musb)
 	val &= ~(1 << wrp->otg_disable);
 	dsps_writel(musb->ctrl_base, wrp->phy_utmi, val);
 
-	/* clear level interrupt */
-	dsps_writel(reg_base, wrp->eoi, 0);
-
 	return 0;
 err0:
 	usb_put_phy(musb->xceiv);
-	usb_nop_xceiv_unregister();
+	if (!glue->dev->of_node)
+		usb_nop_xceiv_unregister();
 	return status;
 }
 
@@ -463,10 +459,12 @@ static int dsps_musb_exit(struct musb *musb)
 
 	/* Shutdown the on-chip PHY and its PLL. */
 	musb_dsps_phy_control(glue, pdev->id, 0);
+	usb_phy_shutdown(musb->xceiv);
 
 	/* NOP driver needs change if supporting dual instance */
 	usb_put_phy(musb->xceiv);
-	usb_nop_xceiv_unregister();
+	if (!glue->dev->of_node)
+		usb_nop_xceiv_unregister();
 
 	return 0;
 }
@@ -570,6 +568,7 @@ static int dsps_create_musb_pdev(struct dsps_glue *glue, u8 id)
 		of_property_read_u32(np, res_name, (u32 *)&pdata->mode);
 		of_property_read_u32(np, "power", (u32 *)&pdata->power);
 		config->multipoint = of_property_read_bool(np, "multipoint");
+		config->instance = id;
 
 		pdata->config		= config;
 	}
@@ -638,6 +637,23 @@ static int dsps_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, glue);
 
+	i = 1;
+	do {
+		iomem = platform_get_resource(pdev, IORESOURCE_MEM, i);
+		if (!iomem) {
+			i--;
+			break;
+		}
+		i++;
+	} while (1);
+
+	glue->instances = i;
+	if (glue->instances < 1) {
+		dev_err(&pdev->dev, "Need atleast iomem for one port.\n");
+		ret = -EINVAL;
+		goto err1_5;
+	}
+
 	/* enable the usbss clocks */
 	pm_runtime_enable(&pdev->dev);
 
@@ -648,7 +664,7 @@ static int dsps_probe(struct platform_device *pdev)
 	}
 
 	/* create the child platform device for all instances of musb */
-	for (i = 0; i < wrp->instances ; i++) {
+	for (i = 0; i < glue->instances; i++) {
 		ret = dsps_create_musb_pdev(glue, i);
 		if (ret != 0) {
 			dev_err(&pdev->dev, "failed to create child pdev\n");
@@ -665,6 +681,7 @@ err3:
 	pm_runtime_put(&pdev->dev);
 err2:
 	pm_runtime_disable(&pdev->dev);
+err1_5:
 	kfree(glue->wrp);
 err1:
 	kfree(glue);
@@ -674,11 +691,10 @@ err0:
 static int dsps_remove(struct platform_device *pdev)
 {
 	struct dsps_glue *glue = platform_get_drvdata(pdev);
-	const struct dsps_musb_wrapper *wrp = glue->wrp;
 	int i;
 
 	/* delete the child platform device */
-	for (i = 0; i < wrp->instances ; i++)
+	for (i = 0; i < glue->instances; i++)
 		platform_device_unregister(glue->musb[i]);
 
 	/* disable usbss clocks */
@@ -694,10 +710,9 @@ static int dsps_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->parent);
 	struct dsps_glue *glue = platform_get_drvdata(pdev);
-	const struct dsps_musb_wrapper *wrp = glue->wrp;
 	int i;
 
-	for (i = 0; i < wrp->instances; i++)
+	for (i = 0; i < glue->instances; i++)
 		musb_dsps_phy_control(glue, i, 0);
 
 	return 0;
@@ -707,10 +722,9 @@ static int dsps_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->parent);
 	struct dsps_glue *glue = platform_get_drvdata(pdev);
-	const struct dsps_musb_wrapper *wrp = glue->wrp;
 	int i;
 
-	for (i = 0; i < wrp->instances; i++)
+	for (i = 0; i < glue->instances; i++)
 		musb_dsps_phy_control(glue, i, 1);
 
 	return 0;
@@ -719,11 +733,10 @@ static int dsps_resume(struct device *dev)
 
 static SIMPLE_DEV_PM_OPS(dsps_pm_ops, dsps_suspend, dsps_resume);
 
-static const struct dsps_musb_wrapper ti81xx_driver_data = {
+static const struct dsps_musb_wrapper am33xx_driver_data = {
 	.revision		= 0x00,
 	.control		= 0x14,
 	.status			= 0x18,
-	.eoi			= 0x24,
 	.epintr_set		= 0x38,
 	.epintr_clear		= 0x40,
 	.epintr_status		= 0x30,
@@ -747,26 +760,14 @@ static const struct dsps_musb_wrapper ti81xx_driver_data = {
 	.rxep_bitmap		= (0xfffe << 16),
 	.musb_core_offset	= 0x400,
 	.poll_seconds		= 2,
-	.instances		= 1,
 };
 
-static const struct platform_device_id musb_dsps_id_table[] = {
-	{
-		.name	= "musb-ti81xx",
-		.driver_data	= (kernel_ulong_t) &ti81xx_driver_data,
-	},
-	{  },	/* Terminating Entry */
-};
-MODULE_DEVICE_TABLE(platform, musb_dsps_id_table);
-
-#ifdef CONFIG_OF
 static const struct of_device_id musb_dsps_of_match[] = {
 	{ .compatible = "ti,musb-am33xx",
-		.data = (void *) &ti81xx_driver_data, },
+		.data = (void *) &am33xx_driver_data, },
 	{  },
 };
 MODULE_DEVICE_TABLE(of, musb_dsps_of_match);
-#endif
 
 static struct platform_driver dsps_usbss_driver = {
 	.probe		= dsps_probe,
@@ -776,7 +777,6 @@ static struct platform_driver dsps_usbss_driver = {
 		.pm	= &dsps_pm_ops,
 		.of_match_table	= of_match_ptr(musb_dsps_of_match),
 	},
-	.id_table	= musb_dsps_id_table,
 };
 
 MODULE_DESCRIPTION("TI DSPS MUSB Glue Layer");
