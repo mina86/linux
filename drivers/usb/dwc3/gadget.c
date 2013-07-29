@@ -1580,9 +1580,10 @@ err3:
 
 err2:
 	dwc->gadget_driver = NULL;
-	spin_unlock_irqrestore(&dwc->lock, flags);
 
 err1:
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
 	free_irq(irq, dwc);
 
 err0:

@@ -83,7 +83,6 @@ struct musb_hdrc_config {
 	u8		vendor_stat __deprecated; /* vendor status reg witdh */
 	u8		dma_req_chan __deprecated; /* bitmask for required dma channels */
 	u8		ram_bits;	/* ram address size */
-	u8		instance;
 
 	struct musb_hdrc_eps_bits *eps_bits __deprecated;
 #ifdef CONFIG_BLACKFIN

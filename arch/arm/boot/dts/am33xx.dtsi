@@ -348,14 +348,6 @@
 			port1-mode = <3>;
 			power = <250>;
 			ti,hwmods = "usb_otg_hs";
-			phys = <&nopphy0 &nopphy1>;
-		};
-
-		nopphy0: usbphy@0 {
-			compatible = "usb-nop-xceiv";
-		};
-		nopphy1: usbphy@1 {
-			compatible = "usb-nop-xceiv";
 		};
 
 		epwmss0: epwmss@48300000 {
