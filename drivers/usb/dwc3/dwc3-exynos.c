@@ -142,24 +142,40 @@ static int dwc3_exynos_probe(struct platform_device *pdev)
 	exynos->dev	= dev;
 	exynos->clk	= clk;
 
-	clk_prepare_enable(exynos->clk);
+	ret = clk_prepare(exynos->clk);
+	if (ret) {
+		dev_err(dev, "failed to prepare clock\n");
+		goto err2;
+	}
+
+	pm_runtime_enable(dev);
+	ret = pm_runtime_get_sync(dev);
+	if (ret) {
+		dev_err(dev, "failed to enable dwc3 device\n");
+		goto err3;
+	}
 
 	if (node) {
 		ret = of_platform_populate(node, NULL, NULL, dev);
 		if (ret) {
 			dev_err(dev, "failed to add dwc3 core\n");
-			goto err2;
+			goto err3;
 		}
 	} else {
 		dev_err(dev, "no device node, failed to add dwc3 core\n");
 		ret = -ENODEV;
-		goto err2;
+		goto err3;
 	}
 
 	return 0;
 
+err3:
+	pm_runtime_put_sync(dev);
+	pm_runtime_disable(dev);
+
 err2:
-	clk_disable_unprepare(clk);
+	clk_unprepare(clk);
+
 err1:
 	return ret;
 }
@@ -172,7 +188,9 @@ static int dwc3_exynos_remove(struct platform_device *pdev)
 	platform_device_unregister(exynos->usb2_phy);
 	platform_device_unregister(exynos->usb3_phy);
 
-	clk_disable_unprepare(exynos->clk);
+	pm_runtime_put_sync(exynos->dev);
+	pm_runtime_disable(exynos->dev);
+	clk_unprepare(exynos->clk);
 
 	return 0;
 }
@@ -185,20 +203,36 @@ static const struct of_device_id exynos_dwc3_match[] = {
 MODULE_DEVICE_TABLE(of, exynos_dwc3_match);
 #endif
 
-static int dwc3_exynos_suspend(struct device *dev)
+static int __dwc3_exynos_suspend(struct dwc3_exynos *exynos)
 {
-	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
-
 	clk_disable(exynos->clk);
 
 	return 0;
 }
 
-static int dwc3_exynos_resume(struct device *dev)
+static int __dwc3_exynos_resume(struct dwc3_exynos *exynos)
+{
+	return clk_enable(exynos->clk);
+}
+
+static int dwc3_exynos_suspend(struct device *dev)
 {
 	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
 
-	clk_enable(exynos->clk);
+	if (pm_runtime_suspended(dev))
+		return 0;
+
+	return __dwc3_exynos_suspend(exynos);
+}
+
+static int dwc3_exynos_resume(struct device *dev)
+{
+	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
+	int ret;
+
+	ret = __dwc3_exynos_resume(exynos);
+	if (ret)
+		return ret;
 
 	/* runtime set active to reflect active state. */
 	pm_runtime_disable(dev);
@@ -208,8 +242,24 @@ static int dwc3_exynos_resume(struct device *dev)
 	return 0;
 }
 
+static int dwc3_exynos_runtime_suspend(struct device *dev)
+{
+	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
+
+	return __dwc3_exynos_suspend(exynos);
+}
+
+static int dwc3_exynos_runtime_resume(struct device *dev)
+{
+	struct dwc3_exynos *exynos = dev_get_drvdata(dev);
+
+	return __dwc3_exynos_resume(exynos);
+}
+
 static const struct dev_pm_ops dwc3_exynos_dev_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(dwc3_exynos_suspend, dwc3_exynos_resume)
+	SET_RUNTIME_PM_OPS(dwc3_exynos_runtime_suspend,
+			dwc3_exynos_runtime_resume, NULL)
 };
 
 static struct platform_driver dwc3_exynos_driver = {
