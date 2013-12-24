@@ -64,7 +64,7 @@ static int otg_set_protocol(struct otg_fsm *fsm, int protocol)
 static int state_changed;
 
 /* Called when leaving a state.  Do state clean up jobs here */
-void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
+static void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
 {
 	switch (old_state) {
 	case OTG_STATE_B_IDLE:
@@ -121,7 +121,7 @@ void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
 }
 
 /* Called when entering a state */
-int otg_set_state(struct otg_fsm *fsm, enum usb_otg_state new_state)
+static int otg_set_state(struct otg_fsm *fsm, enum usb_otg_state new_state)
 {
 	state_changed = 1;
 	if (fsm->otg->phy->state == new_state)
@@ -357,7 +357,7 @@ int otg_statemachine(struct otg_fsm *fsm)
 	default:
 		break;
 	}
-	mutex_lock(&fsm->lock);
+	mutex_unlock(&fsm->lock);
 
 	VDBG("quit statemachine, changed = %d\n", state_changed);
 	return state_changed;
