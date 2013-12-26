@@ -216,6 +216,13 @@ config USB_FOTG210_UDC
 	   Say "y" to link the driver statically, or "m" to build a
 	   dynamically linked module called "fotg210_udc".
 
+config USB_GR_UDC
+       tristate "Aeroflex Gaisler GRUSBDC USB Peripheral Controller Driver"
+       depends on HAS_DMA
+       help
+          Select this to support Aeroflex Gaisler GRUSBDC cores from the GRLIB
+	  VHDL IP core library.
+
 config USB_OMAP
 	tristate "OMAP USB Device Controller"
 	depends on ARCH_OMAP1
@@ -294,11 +301,11 @@ config USB_PXA27X
 	   gadget drivers to also be dynamically linked.
 
 config USB_S3C_HSOTG
-	tristate "S3C HS/OtG USB Device controller"
-	depends on S3C_DEV_USB_HSOTG
+	depends on ARM
+	tristate "Designware/S3C HS/OtG USB Device controller"
 	help
-	  The Samsung S3C64XX USB2.0 high-speed gadget controller
-	  integrated into the S3C64XX series SoC.
+	  The Designware USB2.0 high-speed gadget controller
+	  integrated into many SoCs.
 
 config USB_S3C2410
 	tristate "S3C2410 USB Device Controller"
