@@ -30,7 +30,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/errno.h>
-#include <linux/init.h>
 #include <linux/list.h>
 #include <linux/interrupt.h>
 #include <linux/device.h>
@@ -663,9 +662,6 @@ static inline int gr_queue_int(struct gr_ep *ep, struct gr_request *req,
 static void gr_ep_nuke(struct gr_ep *ep)
 {
 	struct gr_request *req;
-	struct gr_udc *dev;
-
-	dev = ep->dev;
 
 	ep->stopped = 1;
 	ep->dma_start = 0;
