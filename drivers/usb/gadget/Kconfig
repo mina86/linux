@@ -127,6 +127,21 @@ config USB_GADGET_STORAGE_NUM_BUFFERS
 	   a module parameter as well.
 	   If unsure, say 2.
 
+config USB_GADGET_STORAGE_BUFLEN
+	int "Size of each storage pipeline buffer"
+	range 4096 131072
+	default 16384
+	help
+	  For USB2-based device controllers, 16KiB of buffer space is
+	  usually enough to maintain the HW FIFOs full during an entire
+	  session.
+
+	  When dealing with USB3 device controllers, however, 16KiB is
+	  not enough.
+
+	  Change this to match your device requirements. If unsure, say
+	  16384.
+
 #
 # USB Peripheral Controller Support
 #
@@ -226,7 +241,7 @@ config USB_GR_UDC
 config USB_OMAP
 	tristate "OMAP USB Device Controller"
 	depends on ARCH_OMAP1
-	select ISP1301_OMAP if MACH_OMAP_H2 || MACH_OMAP_H3 || MACH_OMAP_H4_OTG
+	select ISP1301_OMAP if MACH_OMAP_H2 || MACH_OMAP_H3
 	help
 	   Many Texas Instruments OMAP processors have flexible full
 	   speed USB device controllers, with support for up to 30
@@ -301,7 +316,6 @@ config USB_PXA27X
 	   gadget drivers to also be dynamically linked.
 
 config USB_S3C_HSOTG
-	depends on ARM
 	tristate "Designware/S3C HS/OtG USB Device controller"
 	help
 	  The Designware USB2.0 high-speed gadget controller
