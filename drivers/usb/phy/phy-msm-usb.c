@@ -1456,7 +1456,7 @@ static int msm_otg_read_dt(struct platform_device *pdev, struct msm_otg *motg)
 	motg->pdata = pdata;
 
 	id = of_match_device(msm_otg_dt_match, &pdev->dev);
-	pdata->phy_type = (int) id->data;
+	pdata->phy_type = (enum msm_usb_phy_type) id->data;
 
 	motg->link_rst = devm_reset_control_get(&pdev->dev, "link");
 	if (IS_ERR(motg->link_rst))
@@ -1586,7 +1586,7 @@ static int msm_otg_probe(struct platform_device *pdev)
 				      np ? "alt_core" : "usb_hs_core_clk");
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	motg->regs = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	motg->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(motg->regs))
 		return PTR_ERR(motg->regs);
 
@@ -1600,7 +1600,7 @@ static int msm_otg_probe(struct platform_device *pdev)
 		if (IS_ERR(phy_select))
 			return PTR_ERR(phy_select);
 		/* Enable second PHY with the OTG port */
-		writel_relaxed(0x1, phy_select);
+		writel(0x1, phy_select);
 	}
 
 	dev_info(&pdev->dev, "OTG regs = %p\n", motg->regs);
