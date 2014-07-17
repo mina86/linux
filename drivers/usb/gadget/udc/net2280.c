@@ -1562,7 +1562,7 @@ static const struct usb_gadget_ops net2280_ops = {
 
 /*-------------------------------------------------------------------------*/
 
-#ifdef	CONFIG_USB_GADGET_PDEBUG_FILES
+#ifdef	CONFIG_USB_GADGET_DEBUG_FILES
 
 /* FIXME move these into procfs, and use seq_file.
  * Sysfs _still_ doesn't behave for arbitrarily sized files,
@@ -2159,7 +2159,7 @@ static void usb_reinit_338x(struct net2280 *dev)
 		if (dev->enhanced_mode) {
 			ep->cfg = &dev->epregs[ne[i]];
 			ep->regs = (struct net2280_ep_regs __iomem *)
-				(((void *)&dev->epregs[ne[i]]) +
+				(((void __iomem *)&dev->epregs[ne[i]]) +
 				ep_reg_addr[i]);
 			ep->fiforegs = &dev->fiforegs[i];
 		} else {

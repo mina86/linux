@@ -1,13 +1,7 @@
 /*
- * ncm.c -- NCM gadget driver
+ * cdc2.c -- CDC Composite driver, with ECM and ACM support
  *
- * Copyright (C) 2010 Nokia Corporation
- * Contact: Yauheni Kaliuta <yauheni.kaliuta@nokia.com>
- *
- * The driver borrows from ether.c which is:
- *
- * Copyright (C) 2003-2005,2008 David Brownell
- * Copyright (C) 2003-2004 Robert Schwebel, Benedikt Spranger
+ * Copyright (C) 2008 David Brownell
  * Copyright (C) 2008 Nokia Corporation
  *
  * This program is free software; you can redistribute it and/or modify
@@ -16,17 +10,16 @@
  * (at your option) any later version.
  */
 
-/* #define DEBUG */
-/* #define VERBOSE_DEBUG */
-
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/usb/composite.h>
 
 #include "u_ether.h"
-#include "u_ncm.h"
+#include "u_serial.h"
+#include "u_ecm.h"
 
-#define DRIVER_DESC		"NCM Gadget"
+
+#define DRIVER_DESC		"CDC Composite Gadget"
+#define DRIVER_VERSION		"King Kamehameha Day 2008"
 
 /*-------------------------------------------------------------------------*/
 
@@ -35,33 +28,31 @@
  */
 
 /* Thanks to NetChip Technologies for donating this product ID.
- * It's for devices with only CDC Ethernet configurations.
+ * It's for devices with only this composite CDC configuration.
  */
 #define CDC_VENDOR_NUM		0x0525	/* NetChip */
-#define CDC_PRODUCT_NUM		0xa4a1	/* Linux-USB Ethernet Gadget */
+#define CDC_PRODUCT_NUM		0xa4aa	/* CDC Composite: ECM + ACM */
 
-/*-------------------------------------------------------------------------*/
 USB_GADGET_COMPOSITE_OPTIONS();
 
 USB_ETHERNET_MODULE_PARAMETERS();
+
+/*-------------------------------------------------------------------------*/
 
 static struct usb_device_descriptor device_desc = {
 	.bLength =		sizeof device_desc,
 	.bDescriptorType =	USB_DT_DEVICE,
 
-	.bcdUSB =		cpu_to_le16 (0x0200),
+	.bcdUSB =		cpu_to_le16(0x0200),
 
 	.bDeviceClass =		USB_CLASS_COMM,
 	.bDeviceSubClass =	0,
 	.bDeviceProtocol =	0,
 	/* .bMaxPacketSize0 = f(hardware) */
 
-	/* Vendor and product id defaults change according to what configs
-	 * we support.  (As does bNumConfigurations.)  These values can
-	 * also be overridden by module parameters.
-	 */
-	.idVendor =		cpu_to_le16 (CDC_VENDOR_NUM),
-	.idProduct =		cpu_to_le16 (CDC_PRODUCT_NUM),
+	/* Vendor and product id can be overridden by module parameters.  */
+	.idVendor =		cpu_to_le16(CDC_VENDOR_NUM),
+	.idProduct =		cpu_to_le16(CDC_PRODUCT_NUM),
 	/* .bcdDevice = f(hardware) */
 	/* .iManufacturer = DYNAMIC */
 	/* .iProduct = DYNAMIC */
@@ -84,6 +75,7 @@ static const struct usb_descriptor_header *otg_desc[] = {
 	NULL,
 };
 
+
 /* string IDs are assigned dynamically */
 static struct usb_string strings_dev[] = {
 	[USB_GADGET_MANUFACTURER_IDX].s = "",
@@ -102,40 +94,58 @@ static struct usb_gadget_strings *dev_strings[] = {
 	NULL,
 };
 
-static struct usb_function_instance *f_ncm_inst;
-static struct usb_function *f_ncm;
-
 /*-------------------------------------------------------------------------*/
+static struct usb_function *f_acm;
+static struct usb_function_instance *fi_serial;
 
-static int __init ncm_do_config(struct usb_configuration *c)
+static struct usb_function *f_ecm;
+static struct usb_function_instance *fi_ecm;
+
+/*
+ * We _always_ have both CDC ECM and CDC ACM functions.
+ */
+static int __init cdc_do_config(struct usb_configuration *c)
 {
-	int status;
-
-	/* FIXME alloc iConfiguration string, set it in c->strings */
+	int	status;
 
 	if (gadget_is_otg(c->cdev->gadget)) {
 		c->descriptors = otg_desc;
 		c->bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	f_ncm = usb_get_function(f_ncm_inst);
-	if (IS_ERR(f_ncm)) {
-		status = PTR_ERR(f_ncm);
-		return status;
+	f_ecm = usb_get_function(fi_ecm);
+	if (IS_ERR(f_ecm)) {
+		status = PTR_ERR(f_ecm);
+		goto err_get_ecm;
 	}
 
-	status = usb_add_function(c, f_ncm);
-	if (status < 0) {
-		usb_put_function(f_ncm);
-		return status;
+	status = usb_add_function(c, f_ecm);
+	if (status)
+		goto err_add_ecm;
+
+	f_acm = usb_get_function(fi_serial);
+	if (IS_ERR(f_acm)) {
+		status = PTR_ERR(f_acm);
+		goto err_get_acm;
 	}
 
+	status = usb_add_function(c, f_acm);
+	if (status)
+		goto err_add_acm;
 	return 0;
+
+err_add_acm:
+	usb_put_function(f_acm);
+err_get_acm:
+	usb_remove_function(c, f_ecm);
+err_add_ecm:
+	usb_put_function(f_ecm);
+err_get_ecm:
+	return status;
 }
 
-static struct usb_configuration ncm_config_driver = {
-	/* .label = f(hardware) */
-	.label			= "CDC Ethernet (NCM)",
+static struct usb_configuration cdc_config_driver = {
+	.label			= "CDC Composite (ECM + ACM)",
 	.bConfigurationValue	= 1,
 	/* .iConfiguration = DYNAMIC */
 	.bmAttributes		= USB_CONFIG_ATT_SELFPOWER,
@@ -143,23 +153,35 @@ static struct usb_configuration ncm_config_driver = {
 
 /*-------------------------------------------------------------------------*/
 
-static int __init gncm_bind(struct usb_composite_dev *cdev)
+static int __init cdc_bind(struct usb_composite_dev *cdev)
 {
 	struct usb_gadget	*gadget = cdev->gadget;
-	struct f_ncm_opts	*ncm_opts;
+	struct f_ecm_opts	*ecm_opts;
 	int			status;
 
-	f_ncm_inst = usb_get_function_instance("ncm");
-	if (IS_ERR(f_ncm_inst))
-		return PTR_ERR(f_ncm_inst);
+	if (!can_support_ecm(cdev->gadget)) {
+		dev_err(&gadget->dev, "controller '%s' not usable\n",
+				gadget->name);
+		return -EINVAL;
+	}
 
-	ncm_opts = container_of(f_ncm_inst, struct f_ncm_opts, func_inst);
+	fi_ecm = usb_get_function_instance("ecm");
+	if (IS_ERR(fi_ecm))
+		return PTR_ERR(fi_ecm);
 
-	gether_set_qmult(ncm_opts->net, qmult);
-	if (!gether_set_host_addr(ncm_opts->net, host_addr))
+	ecm_opts = container_of(fi_ecm, struct f_ecm_opts, func_inst);
+
+	gether_set_qmult(ecm_opts->net, qmult);
+	if (!gether_set_host_addr(ecm_opts->net, host_addr))
 		pr_info("using host ethernet address: %s", host_addr);
-	if (!gether_set_dev_addr(ncm_opts->net, dev_addr))
+	if (!gether_set_dev_addr(ecm_opts->net, dev_addr))
 		pr_info("using self ethernet address: %s", dev_addr);
+
+	fi_serial = usb_get_function_instance("acm");
+	if (IS_ERR(fi_serial)) {
+		status = PTR_ERR(fi_serial);
+		goto fail;
+	}
 
 	/* Allocate string descriptor numbers ... note that string
 	 * contents can be overridden by the composite_dev glue.
@@ -167,55 +189,50 @@ static int __init gncm_bind(struct usb_composite_dev *cdev)
 
 	status = usb_string_ids_tab(cdev, strings_dev);
 	if (status < 0)
-		goto fail;
+		goto fail1;
 	device_desc.iManufacturer = strings_dev[USB_GADGET_MANUFACTURER_IDX].id;
 	device_desc.iProduct = strings_dev[USB_GADGET_PRODUCT_IDX].id;
 
-	status = usb_add_config(cdev, &ncm_config_driver,
-				ncm_do_config);
+	/* register our configuration */
+	status = usb_add_config(cdev, &cdc_config_driver, cdc_do_config);
 	if (status < 0)
-		goto fail;
+		goto fail1;
 
 	usb_composite_overwrite_options(cdev, &coverwrite);
-	dev_info(&gadget->dev, "%s\n", DRIVER_DESC);
+	dev_info(&gadget->dev, "%s, version: " DRIVER_VERSION "\n",
+			DRIVER_DESC);
 
 	return 0;
 
+fail1:
+	usb_put_function_instance(fi_serial);
 fail:
-	usb_put_function_instance(f_ncm_inst);
+	usb_put_function_instance(fi_ecm);
 	return status;
 }
 
-static int __exit gncm_unbind(struct usb_composite_dev *cdev)
+static int __exit cdc_unbind(struct usb_composite_dev *cdev)
 {
-	if (!IS_ERR_OR_NULL(f_ncm))
-		usb_put_function(f_ncm);
-	if (!IS_ERR_OR_NULL(f_ncm_inst))
-		usb_put_function_instance(f_ncm_inst);
+	usb_put_function(f_acm);
+	usb_put_function_instance(fi_serial);
+	if (!IS_ERR_OR_NULL(f_ecm))
+		usb_put_function(f_ecm);
+	if (!IS_ERR_OR_NULL(fi_ecm))
+		usb_put_function_instance(fi_ecm);
 	return 0;
 }
 
-static __refdata struct usb_composite_driver ncm_driver = {
-	.name		= "g_ncm",
+static __refdata struct usb_composite_driver cdc_driver = {
+	.name		= "g_cdc",
 	.dev		= &device_desc,
 	.strings	= dev_strings,
 	.max_speed	= USB_SPEED_HIGH,
-	.bind		= gncm_bind,
-	.unbind		= __exit_p(gncm_unbind),
+	.bind		= cdc_bind,
+	.unbind		= __exit_p(cdc_unbind),
 };
 
+module_usb_composite_driver(cdc_driver);
+
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_AUTHOR("Yauheni Kaliuta");
+MODULE_AUTHOR("David Brownell");
 MODULE_LICENSE("GPL");
-
-static int __init init(void)
-{
-	return usb_composite_probe(&ncm_driver);
-}
-module_init(init);
-
-static void __exit cleanup(void)
-{
-	usb_composite_unregister(&ncm_driver);
-}
-module_exit(cleanup);
