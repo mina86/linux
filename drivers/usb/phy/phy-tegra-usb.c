@@ -33,7 +33,6 @@
 #include <linux/usb/otg.h>
 #include <linux/usb/ulpi.h>
 #include <linux/usb/of.h>
-#include <asm/mach-types.h>
 #include <linux/usb/ehci_def.h>
 #include <linux/usb/tegra_usb_phy.h>
 #include <linux/regulator/consumer.h>
@@ -965,7 +964,7 @@ static const struct tegra_phy_soc_config tegra30_soc_config = {
 	.requires_extra_tuning_parameters = true,
 };
 
-static struct of_device_id tegra_usb_phy_id_table[] = {
+static const struct of_device_id tegra_usb_phy_id_table[] = {
 	{ .compatible = "nvidia,tegra30-usb-phy", .data = &tegra30_soc_config },
 	{ .compatible = "nvidia,tegra20-usb-phy", .data = &tegra20_soc_config },
 	{ },
