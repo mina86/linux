@@ -27,6 +27,7 @@
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
+#include <linux/usb.h>
 
 /**
  * struct usb_udc - describes one usb device controller
@@ -103,6 +104,25 @@ void usb_gadget_unmap_request(struct usb_gadget *gadget,
 EXPORT_SYMBOL_GPL(usb_gadget_unmap_request);
 
 #endif	/* CONFIG_HAS_DMA */
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * usb_gadget_giveback_request - give the request back to the gadget layer
+ * Context: in_interrupt()
+ *
+ * This is called by device controller drivers in order to return the
+ * completed request back to the gadget layer.
+ */
+void usb_gadget_giveback_request(struct usb_ep *ep,
+		struct usb_request *req)
+{
+	if (likely(req->status == 0))
+		usb_led_activity(USB_LED_EVENT_GADGET);
+
+	req->complete(ep, req);
+}
+EXPORT_SYMBOL_GPL(usb_gadget_giveback_request);
 
 /* ------------------------------------------------------------------------- */
 
