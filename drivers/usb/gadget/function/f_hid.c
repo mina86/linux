@@ -875,6 +875,7 @@ static struct usb_function_instance *hidg_alloc_inst(void)
 		kfree(opts);
 		if (idr_is_empty(&hidg_ida.idr))
 			ghid_cleanup();
+		goto unlock;
 	}
 	config_group_init_type_name(&opts->func_inst.group, "", &hid_func_type);
 
@@ -913,7 +914,7 @@ static void hidg_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_free_all_descriptors(f);
 }
 
-struct usb_function *hidg_alloc(struct usb_function_instance *fi)
+static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 {
 	struct f_hidg *hidg;
 	struct f_hid_opts *opts;
@@ -971,17 +972,22 @@ int ghid_setup(struct usb_gadget *g, int count)
 
 	hidg_class = class_create(THIS_MODULE, "hidg");
 	if (IS_ERR(hidg_class)) {
+		status = PTR_ERR(hidg_class);
 		hidg_class = NULL;
-		return PTR_ERR(hidg_class);
+		return status;
 	}
 
 	status = alloc_chrdev_region(&dev, 0, count, "hidg");
-	if (!status) {
-		major = MAJOR(dev);
-		minors = count;
+	if (status) {
+		class_destroy(hidg_class);
+		hidg_class = NULL;
+		return status;
 	}
 
-	return status;
+	major = MAJOR(dev);
+	minors = count;
+
+	return 0;
 }
 
 void ghid_cleanup(void)
