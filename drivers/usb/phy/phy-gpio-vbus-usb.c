@@ -134,6 +134,7 @@ static void gpio_vbus_work(struct work_struct *work)
 
 		atomic_notifier_call_chain(&gpio_vbus->phy.notifier,
 					   status, gpio_vbus->phy.otg->gadget);
+		usb_phy_set_event(&gpio_vbus->phy, USB_EVENT_ENUMERATED);
 	} else {
 		/* optionally disable D+ pullup */
 		if (gpio_is_valid(gpio))
@@ -148,6 +149,7 @@ static void gpio_vbus_work(struct work_struct *work)
 
 		atomic_notifier_call_chain(&gpio_vbus->phy.notifier,
 					   status, gpio_vbus->phy.otg->gadget);
+		usb_phy_set_event(&gpio_vbus->phy, USB_EVENT_NONE);
 	}
 }
 
@@ -380,7 +382,6 @@ MODULE_ALIAS("platform:gpio-vbus");
 static struct platform_driver gpio_vbus_driver = {
 	.driver = {
 		.name  = "gpio-vbus",
-		.owner = THIS_MODULE,
 #ifdef CONFIG_PM
 		.pm = &gpio_vbus_dev_pm_ops,
 #endif

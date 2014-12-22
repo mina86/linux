@@ -126,6 +126,52 @@ static void tusb_wbus_quirk(struct musb *musb, int enabled)
 	}
 }
 
+static u32 tusb_fifo_offset(u8 epnum)
+{
+	return 0x200 + (epnum * 0x20);
+}
+
+static u32 tusb_ep_offset(u8 epnum, u16 offset)
+{
+	return 0x10 + offset;
+}
+
+/* TUSB mapping: "flat" plus ep0 special cases */
+static void tusb_ep_select(void __iomem *mbase, u8 epnum)
+{
+	musb_writeb(mbase, MUSB_INDEX, epnum);
+}
+
+/*
+ * TUSB6010 doesn't allow 8-bit access; 16-bit access is the minimum.
+ */
+static u8 tusb_readb(const void __iomem *addr, unsigned offset)
+{
+	u16 tmp;
+	u8 val;
+
+	tmp = __raw_readw(addr + (offset & ~1));
+	if (offset & 1)
+		val = (tmp >> 8);
+	else
+		val = tmp & 0xff;
+
+	return val;
+}
+
+static void tusb_writeb(void __iomem *addr, unsigned offset, u8 data)
+{
+	u16 tmp;
+
+	tmp = __raw_readw(addr + (offset & ~1));
+	if (offset & 1)
+		tmp = (data << 8) | (tmp & 0xff);
+	else
+		tmp = (tmp & 0xff00) | data;
+
+	__raw_writew(tmp, addr + (offset & ~1));
+}
+
 /*
  * TUSB 6010 may use a parallel bus that doesn't support byte ops;
  * so both loading and unloading FIFOs need explicit byte counts.
@@ -173,7 +219,7 @@ static inline void tusb_fifo_read_unaligned(void __iomem *fifo,
 	}
 }
 
-void musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
+static void tusb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
 {
 	struct musb *musb = hw_ep->musb;
 	void __iomem	*ep_conf = hw_ep->conf;
@@ -223,7 +269,7 @@ void musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
 		tusb_fifo_write_unaligned(fifo, buf, len);
 }
 
-void musb_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *buf)
+static void tusb_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *buf)
 {
 	struct musb *musb = hw_ep->musb;
 	void __iomem	*ep_conf = hw_ep->conf;
@@ -1135,9 +1181,17 @@ static int tusb_musb_exit(struct musb *musb)
 }
 
 static const struct musb_platform_ops tusb_ops = {
+	.quirks		= MUSB_IN_TUSB,
 	.init		= tusb_musb_init,
 	.exit		= tusb_musb_exit,
 
+	.ep_offset	= tusb_ep_offset,
+	.ep_select	= tusb_ep_select,
+	.fifo_offset	= tusb_fifo_offset,
+	.readb		= tusb_readb,
+	.writeb		= tusb_writeb,
+	.read_fifo	= tusb_read_fifo,
+	.write_fifo	= tusb_write_fifo,
 	.enable		= tusb_musb_enable,
 	.disable	= tusb_musb_disable,
 

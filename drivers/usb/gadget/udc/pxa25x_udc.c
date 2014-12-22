@@ -1134,11 +1134,7 @@ static const struct file_operations debug_fops = {
 		dev->debugfs_udc = debugfs_create_file(dev->gadget.name, \
 			S_IRUGO, NULL, dev, &debug_fops); \
 	} while (0)
-#define remove_debug_files(dev) \
-	do { \
-		if (dev->debugfs_udc) \
-			debugfs_remove(dev->debugfs_udc); \
-	} while (0)
+#define remove_debug_files(dev) debugfs_remove(dev->debugfs_udc)
 
 #else	/* !CONFIG_USB_GADGET_DEBUG_FILES */
 
@@ -2296,7 +2292,6 @@ static struct platform_driver udc_driver = {
 	.suspend	= pxa25x_udc_suspend,
 	.resume		= pxa25x_udc_resume,
 	.driver		= {
-		.owner	= THIS_MODULE,
 		.name	= "pxa25x-udc",
 	},
 };

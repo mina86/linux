@@ -303,7 +303,7 @@ static void a_wait_vfall_tmout_func(void *ptr, unsigned long indicator)
 	set_tmout(ci, indicator);
 	/* Disable port power */
 	hw_write(ci, OP_PORTSC, PORTSC_W1C_BITS | PORTSC_PP, 0);
-	/* Clear exsiting DP irq */
+	/* Clear existing DP irq */
 	hw_write_otgsc(ci, OTGSC_DPIS, OTGSC_DPIS);
 	/* Enable data pulse irq */
 	hw_write_otgsc(ci, OTGSC_DPIE, OTGSC_DPIE);
@@ -543,7 +543,7 @@ static int ci_otg_start_host(struct otg_fsm *fsm, int on)
 		ci_role_start(ci, CI_ROLE_HOST);
 	} else {
 		ci_role_stop(ci);
-		hw_device_reset(ci, USBMODE_CM_DC);
+		hw_device_reset(ci);
 		ci_role_start(ci, CI_ROLE_GADGET);
 	}
 	mutex_lock(&fsm->lock);
@@ -663,7 +663,7 @@ static void ci_otg_fsm_event(struct ci_hdrc *ci)
 			 fsm->b_bus_suspend = 1;
 			/*
 			 * Init a timer to know how long this suspend
-			 * will contine, if time out, indicates B no longer
+			 * will continue, if time out, indicates B no longer
 			 * wants to be host role
 			 */
 			 ci_otg_add_timer(ci, A_BIDL_ADIS);
@@ -795,11 +795,8 @@ int ci_hdrc_otg_fsm_init(struct ci_hdrc *ci)
 
 	ci->fsm_timer = devm_kzalloc(ci->dev,
 			sizeof(struct ci_otg_fsm_timer_list), GFP_KERNEL);
-	if (!ci->fsm_timer) {
-		dev_err(ci->dev,
-		"Failed to allocate timer structure for ci hdrc otg!\n");
+	if (!ci->fsm_timer)
 		return -ENOMEM;
-	}
 
 	INIT_LIST_HEAD(&ci->fsm_timer->active_timers);
 	retval = ci_otg_init_timers(ci);
