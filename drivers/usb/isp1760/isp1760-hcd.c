@@ -1335,9 +1335,7 @@ static int isp1760_run(struct usb_hcd *hcd)
 	if (retval)
 		return retval;
 
-	init_timer(&errata2_timer);
-	errata2_timer.function = errata2_function;
-	errata2_timer.data = (unsigned long) hcd;
+	setup_timer(&errata2_timer, errata2_function, (unsigned long)hcd);
 	errata2_timer.expires = jiffies + SLOT_CHECK_PERIOD * HZ / 1000;
 	add_timer(&errata2_timer);
 
@@ -1774,13 +1772,13 @@ static void isp1760_hub_descriptor(struct isp1760_hcd *priv,
 	memset(&desc->u.hs.DeviceRemovable[temp], 0xff, temp);
 
 	/* per-port overcurrent reporting */
-	temp = 0x0008;
+	temp = HUB_CHAR_INDV_PORT_OCPM;
 	if (HCS_PPC(priv->hcs_params))
 		/* per-port power control */
-		temp |= 0x0001;
+		temp |= HUB_CHAR_INDV_PORT_LPSM;
 	else
 		/* no power switching */
-		temp |= 0x0002;
+		temp |= HUB_CHAR_NO_LPSM;
 	desc->wHubCharacteristics = cpu_to_le16(temp);
 }
 
@@ -2210,6 +2208,9 @@ int isp1760_hcd_register(struct isp1760_hcd *priv, void __iomem *regs,
 	hcd->regs = regs;
 	hcd->rsrc_start = mem->start;
 	hcd->rsrc_len = resource_size(mem);
+
+	/* This driver doesn't support wakeup requests */
+	hcd->cant_recv_wakeups = 1;
 
 	ret = usb_add_hcd(hcd, irq, irqflags);
 	if (ret)
