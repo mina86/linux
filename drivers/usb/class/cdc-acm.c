@@ -744,11 +744,15 @@ static void acm_tty_flush_chars(struct tty_struct *tty)
 	int err;
 	unsigned long flags;
 
+	if (!cur) /* nothing to do */
+		return;
+
 	acm->putbuffer = NULL;
 	err = usb_autopm_get_interface_async(acm->control);
 	spin_lock_irqsave(&acm->write_lock, flags);
 	if (err < 0) {
 		cur->use = 0;
+		acm->putbuffer = cur;
 		goto out;
 	}
 
@@ -1179,6 +1183,9 @@ static int acm_probe(struct usb_interface *intf,
 	if (quirks == NO_UNION_NORMAL) {
 		data_interface = usb_ifnum_to_if(usb_dev, 1);
 		control_interface = usb_ifnum_to_if(usb_dev, 0);
+		/* we would crash */
+		if (!data_interface || !control_interface)
+			return -ENODEV;
 		goto skip_normal_probe;
 	}
 
